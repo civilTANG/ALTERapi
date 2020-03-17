@@ -381,13 +381,13 @@ for candidate in v.attrs:
     lineno = candidate.lineno
     print("original API:" +oldstmt)
     if replace_one(candidate):
-        print('Recommend API-one:' + replace_one(candidate))
+        print('Recommend API:' + replace_one(candidate))
     if replace_two(candidate):
-        print('Recommend API-two:' + replace_two(candidate))
+        print('Recommend API:' + replace_two(candidate))
     if replace_three(candidate):
-        print('Recommend API-three:' + replace_three(candidate))
+        print('Recommend API:' + replace_three(candidate))
     if replace_four(candidate):
-        print('Recommend API-four:' + replace_four(candidate))
+        print('Recommend API:' + replace_four(candidate))
 
     print("lineno:{}".format(lineno))
     print('###############################################')
