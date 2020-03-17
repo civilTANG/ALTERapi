@@ -42,27 +42,6 @@ class CallParser(ast.NodeVisitor):
             self.attrs.append(node)
 
 
-# insert new code
-class CodeInstrumentator(ast.NodeTransformer):
-    def __init__(self, lineno, newnode):
-        self.line = lineno
-        self.newnode = newnode
-
-    def generic_visit(self, node):
-        rlist = list(ast.iter_fields(node))
-        for field, value in reversed(rlist):
-            if isinstance(value, list):
-                for item in value:
-                    if hasattr(item, 'lineno') and item.lineno == self.line:
-                        index = value.index(item)
-                        value.insert(index + 1, self.newnode)
-                        return node
-                    if isinstance(item, ast.AST):
-                        self.visit(item)
-            elif isinstance(value, ast.AST):
-                self.visit(value)
-
-
 # 直接替换的情况
 def replace_one(node):
 
