@@ -6,13 +6,13 @@ the performance of data analytics programs is becoming a major concern for devel
 `api_replacement` can recommend higher-efficiency APIs.
 
 
-#installing
+# installing
 To install the latest development version from GitHub
 
 `$ pip install git+git://github.com/civilTANG/api_replacement.git`
 
 
 
-#Example
+# Example
 Here is an example `test.py` using `api_replacement`
 
