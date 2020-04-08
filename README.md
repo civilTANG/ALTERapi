@@ -15,4 +15,9 @@ To install the latest development version from GitHub
 
 # Example
 Here is an example `test.py` using `api_replacement`
+```python
+import replace_algorithm
+test = replace_algorithm('code_path')
+test.find()
+```
 
