@@ -23,16 +23,16 @@ x.find('code.py')
 ```
 result
 
-`.......`
+```.......
 
-`original API:np.dot(W, filter1)`
+Original API:np.dot(W, filter1)
 
-`Recommend API:np.tensordot(np,W, filter1,axes=1)`
+Recommend API:np.tensordot(np,W, filter1,axes=1)
 
-`Recommend API:np.einsum('ij,jm->im',W, filter1)`
+Recommend API:np.einsum('ij,jm->im',W, filter1)
 
-`lineno:46`
+lineno:46
 
-`........`
+........```
 
 
