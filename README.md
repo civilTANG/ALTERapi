@@ -11,9 +11,9 @@ The performance of data analytics programs has become one of the developers’ m
 # Installing
 To install the latest version 
 
-dowmload`apireplacement.tar.gz`
+dowmload`apireplacement-0.0.1.tar.gz`
 
-`$ pip install apireplacement.tar.gz`
+`$ pip install apireplacement-0.0.1.tar.gz`
 
 
 
