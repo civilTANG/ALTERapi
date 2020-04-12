@@ -1,292 +1,506 @@
-#Initially forked from Bojan's kernel here: https://www.kaggle.com/tunguz/bow-meta-text-and-dense-features-lb-0-2242/code
-#That kernel was forked from Nick Brook's kernel here: https://www.kaggle.com/nicapotato/bow-meta-text-and-dense-features-lgbm?scriptVersionId=3493400
-#Used oof method from Faron's kernel here: https://www.kaggle.com/mmueller/stacking-starter?scriptVersionId=390867
-#Used some text cleaning method from Muhammad Alfiansyah's kernel here: https://www.kaggle.com/muhammadalfiansyah/push-the-lgbm-v19
-import time
-notebookstart= time.time()
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import os
-import gc
-print("Data:\n",os.listdir("../input"))
-
-# Models Packages
-from sklearn import metrics
-from sklearn.metrics import mean_squared_error
-from sklearn import feature_selection
-from sklearn.model_selection import train_test_split
-from sklearn import preprocessing
-
-# Gradient Boosting
-import lightgbm as lgb
-from sklearn.linear_model import Ridge
-from sklearn.cross_validation import KFold
-
-# Tf-Idf
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.pipeline import FeatureUnion
-from scipy.sparse import hstack, csr_matrix
-from nltk.corpus import stopwords 
-
-# Viz
-import seaborn as sns
+from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
-import re
-import string
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-NFOLDS = 5
-SEED = 42
+from subprocess import check_output
+#print(check_output(["ls", "../input"]).decode("utf8"))
 
-class SklearnWrapper(object):
-    def __init__(self, clf, seed=0, params=None, seed_bool = True):
-        if(seed_bool == True):
-            params['random_state'] = seed
-        self.clf = clf(**params)
+# Any results you write to the current directory are saved as output.
+# Load Data
+print("Loading Raw Data")
+train_raw = pd.read_csv("../input/train.csv")
+test_raw = pd.read_csv("../input/test.csv")
 
-    def train(self, x_train, y_train):
-        self.clf.fit(x_train, y_train)
+# Helper Functions 
+def get_features(raw_data):
+    cols = []
+    # Get data of each row from pixel0 to pixel783 
+    for px in range(784):
+        cols.append("pixel"+str(px))   
+    #return (raw_data.as_matrix(cols) /255) - 0.5
+    return (raw_data.as_matrix(cols) > 0 ) * 1
 
-    def predict(self, x):
-        return self.clf.predict(x)
+def cross_validated(X, n_samples):
+    kf = KFold(n_samples, shuffle = True)
+    result = [group for group in kf.split(X)]
+    return result        
+    
+# Deep Neural Net
+# Initialize Parameters 
+def init_dnn_parameters(n, activations, epsilons, filter1=None):
+    L = len(n)
+    params = {}
+    vgrad = {}
+    d_rms = {}
+    for l in range(1,L):
+        W = np.random.randn(n[l],n[l-1]) * epsilons[l] 
+        # Experiment, multiply filter in case of input layer weights 
+        if filter1 is not None and l == 1:
+            W = np.dot(W, filter1) 
+        b = np.zeros((n[l],1))
+        params["W"+str(l)] = W
+        params["b"+str(l)] = b
+        # Normalization Parameters
+        params["mu"+str(l)] = 0
+        params["sig"+str(l)] = 1
         
-def get_oof(clf, x_train, y, x_test):
-    oof_train = np.zeros((ntrain,))
-    oof_test = np.zeros((ntest,))
-    oof_test_skf = np.empty((NFOLDS, ntest))
+        vgrad["W"+str(l)] = W * 0
+        vgrad["b"+str(l)] = b * 0
+        d_rms["W"+str(l)] = W * 0
+        d_rms["b"+str(l)] = b * 0
 
-    for i, (train_index, test_index) in enumerate(kf):
-        print('\nFold {}'.format(i))
-        x_tr = x_train[train_index]
-        y_tr = y[train_index]
-        x_te = x_train[test_index]
+        params["act"+str(l)] = activations[l]
+    params["n"] = n
+    return params, vgrad, d_rms
 
-        clf.train(x_tr, y_tr)
+# Activation Functions 
+def gdnn(X, activation_function):
+    leak_factor = 1/100000
+    if activation_function == 'tanh':
+        return np.tanh(X)
+    if activation_function == 'lReLU':
+        return ((X > 0) * X) + ((X <= 0)* X * leak_factor)
+    if activation_function == 'linear':
+        return X
+    if activation_function == 'softmax':
+        t = np.exp(X - np.max(X, axis = 0))
+        t_sum = np.reshape(np.sum(t, axis = 0),(1,-1))
+        return t/t_sum
+    else: 
+        return 1 / (1 +np.exp(-X))
 
-        oof_train[test_index] = clf.predict(x_te)
-        oof_test_skf[i, :] = clf.predict(x_test)
+def gdnn_prime(X, activation_function):
+    leak_factor = 1/100000
+    if activation_function == 'tanh':
+        return 1-np.power(X,2)
+    if activation_function == 'lReLU':
+        return ((X > 0) * 1) + ((X <= 0)* leak_factor)
+    if activation_function == 'linear':
+        return X**0
+    else: 
+        return (1 / (1 +np.exp(-X)))*(1-(1 / (1 +np.exp(-X))))
 
-    oof_test[:] = oof_test_skf.mean(axis=0)
-    return oof_train.reshape(-1, 1), oof_test.reshape(-1, 1)
+# Cost 
+def get_dnn_cost(Y_hat, Y):
+    #print(Y.shape)
+    m = Y.shape[1]
+    # in case of softmax, we do not include (1-Y) term 
+    logprobs = np.multiply(np.log(Y_hat),Y) # + np.multiply(np.log(1-Y_hat),1-Y)
+    cost = - np.sum(logprobs) /m
+    return cost
     
-def cleanName(text):
-    try:
-        textProc = text.lower()
-        textProc = " ".join(map(str.strip, re.split('(\d+)',textProc)))
-        regex = re.compile(u'[^[:alpha:]]')
-        textProc = regex.sub(" ", textProc)
-        textProc = " ".join(textProc.split())
-        return textProc
-    except: 
-        return "name error"
+# Forward Propagation 
+def forward_dnn_propagation(X, params):
+    # Get Network Parameters 
+    n = params["n"]
+    L = len(n)
     
+    A_prev = X
+    cache = {}
+    cache["A"+str(0)] = X
+    for l in range(1,L):
+        W = params["W"+str(l)]
+        b = params["b"+str(l)]
+        #print("DEBUG FF l[{: <2}] - Mu {:.2E}, Sig {:.2E}".format(l, params["mu"+str(l)],params["sig"+str(l)] ))
+        Z = (np.dot(W,A_prev)+b - params["mu"+str(l)]) / (params["sig"+str(l)] + 1e-8)
+        A = gdnn(Z,params['act'+str(l)])
+        cache["Z"+str(l)] = Z
+        cache["A"+str(l)] = A
+        
+        A_prev = A
+    return A, cache, params 
+
+# Backward Propagation
+def back_dnn_propagation(X, Y, params, cache, alpha = 0.01, _lambda=0, keep_prob=1):
+    n = params["n"]
+    L = len(n) -1
     
-def rmse(y, y0):
-    assert len(y) == len(y0)
-    return np.sqrt(np.mean(np.power((y - y0), 2)))
-
-print("\nData Load Stage")
-training = pd.read_csv('../input/train.csv', index_col = "item_id", parse_dates = ["activation_date"])
-traindex = training.index
-testing = pd.read_csv('../input/test.csv', index_col = "item_id", parse_dates = ["activation_date"])
-testdex = testing.index
-
-ntrain = training.shape[0]
-ntest = testing.shape[0]
-
-kf = KFold(ntrain, n_folds=NFOLDS, shuffle=True, random_state=SEED)
-
-y = training.deal_probability.copy()
-training.drop("deal_probability",axis=1, inplace=True)
-print('Train shape: {} Rows, {} Columns'.format(*training.shape))
-print('Test shape: {} Rows, {} Columns'.format(*testing.shape))
-
-print("Combine Train and Test")
-df = pd.concat([training,testing],axis=0)
-del training, testing
-gc.collect()
-print('\nAll Data shape: {} Rows, {} Columns'.format(*df.shape))
-
-
-print("Feature Engineering")
-df["price"] = np.log(df["price"]+0.001)
-df["price"].fillna(-999,inplace=True)
-df["image_top_1"].fillna(-999,inplace=True)
-
-print("\nCreate Time Variables")
-df["Weekday"] = df['activation_date'].dt.weekday
-df["Weekd of Year"] = df['activation_date'].dt.week
-df["Day of Month"] = df['activation_date'].dt.day
-
-# Create Validation Index and Remove Dead Variables
-training_index = df.loc[df.activation_date<=pd.to_datetime('2017-04-07')].index
-validation_index = df.loc[df.activation_date>=pd.to_datetime('2017-04-08')].index
-df.drop(["activation_date","image"],axis=1,inplace=True)
-
-print("\nEncode Variables")
-categorical = ["user_id","region","city","parent_category_name","category_name","user_type","image_top_1"]
-print("Encoding :",categorical)
-
-# Encoder:
-lbl = preprocessing.LabelEncoder()
-for col in categorical:
-    df[col] = lbl.fit_transform(df[col].astype(str))
+    m = X.shape[1]
+    W_limit = 5
+    A = cache["A"+str(L)]
+    A1 = cache["A"+str(L-1)]
+    grads = {}
     
-print("\nText Features")
-
-# Feature Engineering 
-df['text_feat'] = df.apply(lambda row: ' '.join([
-    str(row['param_1']), 
-    str(row['param_2']), 
-    str(row['param_3'])]),axis=1) # Group Param Features
+    # Outer Layer 
+    dZ = A - Y#gdnn_prime(A - Y, params["act"+str(L)])
+    dW = 1/m * np.dot(dZ, A1.T)
+    db = 1/m * np.sum(dZ, axis=1, keepdims=True)
+    grads["dZ"+str(L)] = dZ
+    grads["dW"+str(L)] = dW + _lambda/m * params["W"+str(L)]
+    grads["db"+str(L)] = db
     
-df.drop(["param_1","param_2","param_3"],axis=1,inplace=True)
-
-# Meta Text Features
-textfeats = ["description","text_feat", "title"]
-
-df['title'] = df['title'].apply(lambda x: cleanName(x))
-df["description"]   = df["description"].apply(lambda x: cleanName(x))
-for cols in textfeats:
-    df[cols] = df[cols].astype(str) 
-    df[cols] = df[cols].astype(str).fillna('missing') # FILL NA
-    df[cols] = df[cols].str.lower() # Lowercase all text, so that capitalized words dont get treated differently
-    df[cols + '_num_chars'] = df[cols].apply(len) # Count number of Characters
-    df[cols + '_num_words'] = df[cols].apply(lambda comment: len(comment.split())) # Count number of Words
-    df[cols + '_num_unique_words'] = df[cols].apply(lambda comment: len(set(w for w in comment.split())))
-    df[cols + '_words_vs_unique'] = df[cols+'_num_unique_words'] / df[cols+'_num_words'] * 100 # Count Unique Words
-
-print("\n[TF-IDF] Term Frequency Inverse Document Frequency Stage")
-russian_stop = set(stopwords.words('russian'))
-
-tfidf_para = {
-    "stop_words": russian_stop,
-    "analyzer": 'word',
-    "token_pattern": r'\w{1,}',
-    "sublinear_tf": True,
-    "dtype": np.float32,
-    "norm": 'l2',
-    #"min_df":5,
-    #"max_df":.9,
-    "smooth_idf":False
-}
-
-
-def get_col(col_name): return lambda x: x[col_name]
-##I added to the max_features of the description. It did not change my score much but it may be worth investigating
-vectorizer = FeatureUnion([
-        ('description',TfidfVectorizer(
-            ngram_range=(1, 2),
-            max_features=50000,
-            **tfidf_para,
-            preprocessor=get_col('description'))),
-        ('text_feat',CountVectorizer(
-            ngram_range=(1, 2),
-            #max_features=7000,
-            preprocessor=get_col('text_feat'))),
-        ('title',TfidfVectorizer(
-            ngram_range=(1, 2),
-            **tfidf_para,
-            #max_features=7000,
-            preprocessor=get_col('title')))
-    ])
+    # Update Outer Layer
+    params["W"+str(L)] -= alpha * dW
+    params["b"+str(L)] -= alpha * db
+    for l in reversed(range(1,L)):
+        params["mu"+str(l)] = np.mean(cache["Z"+str(l)])
+        params["sig"+str(l)] = np.std(cache["Z"+str(l)])
+        dZ2 = dZ
+        W2 = params["W"+str(l+1)]
+        b = params["b"+str(l)]
+        A2 = cache["A"+str(l)]
+        A1 = cache["A"+str(l-1)]
+        d = np.random.randn(A1.shape[0],A1.shape[1]) > keep_prob
+        A1 = A1 * d/keep_prob
+        dZ = np.dot(W2.T, dZ2)*gdnn_prime(A2, params["act"+str(l)])
+        dW = 1/m * np.dot(dZ, A1.T) + _lambda/m * params["W"+str(l)]
+        db = 1/m * np.sum(dZ, axis=1, keepdims=True)
+        grads["dZ"+str(l)] = dZ
+        grads["dW"+str(l)] = dW
+        grads["db"+str(l)] = db
+        params["W"+str(l)] -= alpha *dW
+        params["b"+str(l)] -= alpha *db
     
-start_vect=time.time()
+    return grads, params    
 
-#Fit my vectorizer on the entire dataset instead of the training rows
-#Score improved by .0001
-vectorizer.fit(df.to_dict('records'))
-
-ready_df = vectorizer.transform(df.to_dict('records'))
-tfvocab = vectorizer.get_feature_names()
-print("Vectorization Runtime: %0.2f Minutes"%((time.time() - start_vect)/60))
-
-# Drop Text Cols
-textfeats = ["description","text_feat", "title"]
-df.drop(textfeats, axis=1,inplace=True)
-
-from sklearn.metrics import mean_squared_error
-from math import sqrt
-
-ridge_params = {'alpha':20.0, 'fit_intercept':True, 'normalize':False, 'copy_X':True,
-                'max_iter':None, 'tol':0.001, 'solver':'auto', 'random_state':SEED}
-
-#Ridge oof method from Faron's kernel
-#I was using this to analyze my vectorization, but figured it would be interesting to add the results back into the dataset
-#It doesn't really add much to the score, but it does help lightgbm converge faster
-ridge = SklearnWrapper(clf=Ridge, seed = SEED, params = ridge_params)
-ridge_oof_train, ridge_oof_test = get_oof(ridge, ready_df[:ntrain], y, ready_df[ntrain:])
-
-rms = sqrt(mean_squared_error(y, ridge_oof_train))
-print('Ridge OOF RMSE: {}'.format(rms))
-
-print("Modeling Stage")
-
-ridge_preds = np.concatenate([ridge_oof_train, ridge_oof_test])
-
-df['ridge_preds'] = ridge_preds
-
-# Combine Dense Features with Sparse Text Bag of Words Features
-X = hstack([csr_matrix(df.loc[traindex,:].values),ready_df[0:traindex.shape[0]]]) # Sparse Matrix
-testing = hstack([csr_matrix(df.loc[testdex,:].values),ready_df[traindex.shape[0]:]])
-tfvocab = df.columns.tolist() + tfvocab
-for shape in [X,testing]:
-    print("{} Rows and {} Cols".format(*shape.shape))
-print("Feature Names Length: ",len(tfvocab))
-del df
-gc.collect();
-
-print("\nModeling Stage")
-X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.10, random_state=23)
+# Momentum Gradient Descent 
+def back_dnn_propagation_with_momentum(X, Y, params, cache, alpha = 0.01, _lambda=0, 
+                    keep_prob=1, beta=0.9, 
+                    vgrad = {}, d_rms={}, t=0):
+    n = params["n"]
+    L = len(n) -1
     
-print("Light Gradient Boosting Regressor")
-lgbm_params =  {
-    'task': 'train',
-    'boosting_type': 'gbdt',
-    'objective': 'regression',
-    'metric': 'rmse',
-    'max_depth': 15,
-    'num_leaves': 33,
-    'feature_fraction': 0.7,
-    'bagging_fraction': 0.8,
-    # 'bagging_freq': 5,
-    'learning_rate': 0.019,
-    'verbose': 0
-}  
+    beta2 = 0.999
+    
+    m = X.shape[1]
+    W_limit = 5
+    A = cache["A"+str(L)]
+    A1 = cache["A"+str(L-1)]
+    grads = {}
 
+    v_corr = {}
+    s_corr = {}
+    # Outer Layer 
+    dZ = A - Y#gdnn_prime(A - Y, params["act"+str(L)])
+    dW = 1/m * np.dot(dZ, A1.T)
+    db = 1/m * np.sum(dZ, axis=1, keepdims=True)
+    grads["dZ"+str(L)] = dZ
+    grads["dW"+str(L)] = dW + _lambda/m * params["W"+str(L)]
+    grads["db"+str(L)] = db
+    
+    vgrad["W"+str(L)] = beta * vgrad["W"+str(L)] + (1 - beta) * grads["dW"+str(L)] 
+    vgrad["b"+str(L)] = beta * vgrad["b"+str(L)] + (1 - beta) * grads["db"+str(L)]
 
-lgtrain = lgb.Dataset(X_train, y_train,
-                feature_name=tfvocab,
-                categorical_feature = categorical)
-lgvalid = lgb.Dataset(X_valid, y_valid,
-                feature_name=tfvocab,
-                categorical_feature = categorical)
+    v_corr["W"+str(L)] = vgrad["W"+str(L)] / (1 - beta ** t)  
+    v_corr["b"+str(L)] = vgrad["b"+str(L)] / (1 - beta ** t) 
 
-modelstart = time.time()
-lgb_clf = lgb.train(
-    lgbm_params,
-    lgtrain,
-    num_boost_round=16000,
-    valid_sets=[lgtrain, lgvalid],
-    valid_names=['train','valid'],
-    early_stopping_rounds=200,
-    verbose_eval=200
-)
+    # RMS
+    d_rms["W"+str(L)] = beta2 * d_rms["W"+str(L)] + (1 - beta2) * grads["dW"+str(L)] ** 2 
+    d_rms["b"+str(L)] = beta2 * d_rms["b"+str(L)] + (1 - beta2) * grads["db"+str(L)] ** 2
 
-# Feature Importance Plot
-f, ax = plt.subplots(figsize=[7,10])
-lgb.plot_importance(lgb_clf, max_num_features=50, ax=ax)
-plt.title("Light GBM Feature Importance")
-plt.savefig('feature_import.png')
+    s_corr["W"+str(L)] = d_rms["W"+str(L)] / (1 - beta2 ** t) 
+    s_corr["b"+str(L)] = d_rms["b"+str(L)] / (1 - beta2 ** t)
 
-print("Model Evaluation Stage")
-print('RMSE:', np.sqrt(metrics.mean_squared_error(y_valid, lgb_clf.predict(X_valid))))
-lgpred = lgb_clf.predict(testing) 
+    #print("Debug - ADAM (L)")
+    #print( v_corr["W"+str(L)] / np.sqrt((s_corr["W"+str(L)]) + 1e-8))
+    # Update Outer Layer
+    params["W"+str(L)] -= alpha * v_corr["W"+str(L)] / (np.sqrt(s_corr["W"+str(L)]) + 1e-8)
+    params["b"+str(L)] -= alpha * v_corr["b"+str(L)] / (np.sqrt(s_corr["b"+str(L)]) + 1e-8)
+    
+    for l in reversed(range(1,L)):
+        if l < L:
+            params["mu"+str(l)] = (1 - alpha) * params["mu"+str(l)] + alpha * np.reshape(np.nanmean(cache["Z"+str(l)], axis=1),(-1,1))
+            params["sig"+str(l)] = (1 - alpha) * params["sig"+str(l)] + alpha * np.reshape(np.nanstd(cache["Z"+str(l)], axis = 1),(-1,1))
 
-#Mixing lightgbm with ridge. I haven't really tested if this improves the score or not
-#blend = 0.95*lgpred + 0.05*ridge_oof_test[:,0]
-lgsub = pd.DataFrame(lgpred,columns=["deal_probability"],index=testdex)
-lgsub['deal_probability'].clip(0.0, 1.0, inplace=True) # Between 0 and 1
-lgsub.to_csv("lgsub.csv",index=True,header=True)
-print("Model Runtime: %0.2f Minutes"%((time.time() - modelstart)/60))
-print("Notebook Runtime: %0.2f Minutes"%((time.time() - notebookstart)/60))
+        dZ2 = dZ
+        W2 = params["W"+str(l+1)]
+        b = params["b"+str(l)]
+        A2 = cache["A"+str(l)]
+        A1 = cache["A"+str(l-1)]
+        d = np.random.randn(A1.shape[0],A1.shape[1]) > keep_prob
+        A1 = A1 * d/keep_prob
+        dZ = np.dot(W2.T, dZ2)*gdnn_prime(A2, params["act"+str(l)])
+        dW = 1/m * np.dot(dZ, A1.T) + _lambda/m * params["W"+str(l)]
+        db = 1/m * np.sum(dZ, axis=1, keepdims=True)
+        grads["dZ"+str(l)] = dZ
+        grads["dW"+str(l)] = dW
+        grads["db"+str(l)] = db
+        vgrad["W"+str(l)] = beta * vgrad["W"+str(l)] + (1 - beta) * grads["dW"+str(l)] 
+        vgrad["b"+str(l)] = beta * vgrad["b"+str(l)] + (1 - beta) * grads["db"+str(l)]
+        v_corr["W"+str(l)] = vgrad["W"+str(l)] / (1 - beta ** t)  
+        v_corr["b"+str(l)] = vgrad["b"+str(l)] / (1 - beta ** t) 
+        
+        d_rms["W"+str(l)] = beta2 * d_rms["W"+str(l)] + (1 - beta2) * grads["dW"+str(l)] ** 2 
+        d_rms["b"+str(l)] = beta2 * d_rms["b"+str(l)] + (1 - beta2) * grads["db"+str(l)] ** 2
+        s_corr["W"+str(l)] = d_rms["W"+str(l)] / (1 - beta2 ** t) 
+        s_corr["b"+str(l)] = d_rms["b"+str(l)] / (1 - beta2 ** t)
+
+        #print("Debug - ADAM ({})".format(l))
+        #print( v_corr["W"+str(l)] / np.sqrt((s_corr["W"+str(l)]) + 1e-8))
+        
+        params["W"+str(l)] -= alpha * v_corr["W"+str(l)] / (np.sqrt(s_corr["W"+str(l)]) + 1e-8)
+        params["b"+str(l)] -= alpha * v_corr["b"+str(l)] / (np.sqrt(s_corr["b"+str(l)]) + 1e-8)
+    
+    return grads, params, vgrad, d_rms    
+
+def batch_back_propagation(X, Y, params, cache, alpha = 0.01, 
+            _lambda=0, keep_prob=1,chunk_size=128, beta=0.9, 
+            vgrad={}, d_rms={}):
+    # slice input and output data into smaller chunks 
+    m = X.shape[1]
+    include_probability = keep_prob
+    idx_from = 0
+    batch_size = chunk_size 
+    idx_to = min(batch_size, m)
+    print("Mini-Batch - Shuffling Training Data")
+    shuffled_idx = list(np.random.permutation(m))
+    X_shuffle = X[:,shuffled_idx]
+    y_shuffle = Y[:,shuffled_idx]
+    counter = 0
+    while idx_to < m:
+        counter += 1
+        if idx_from < idx_to:
+            #print(" [{: >3d}], Size [{}] End @ {:5.2f}%, Alph {:.2E}".format(counter,
+            #                                                            batch_size, 
+            #                                                            100*idx_to/m,
+            #                                                            alpha * (0.9 ** (counter-1))),end="")
+            X_train = X_shuffle[:,idx_from:idx_to]
+            y_train = y_shuffle[:,idx_from:idx_to]
+    
+            A, cache, params = forward_dnn_propagation(X_train, params)
+            #grads, params= back_dnn_propagation(X_train, y_train, params, cache, alpha ,_lambda, keep_prob)
+            grads, params, vgrad, d_rms= back_dnn_propagation_with_momentum( X_train, 
+                                                                    y_train, 
+                                                                    params, 
+                                                                    cache, 
+                                                                    alpha, # * ((1-alpha) ** (counter-1)),
+                                                                    _lambda, 
+                                                                    keep_prob,
+                                                                    beta,
+                                                                    vgrad,
+                                                                    d_rms,
+                                                                    counter)
+            #print(" Tr. Score {:.2E}".format(np.mean(get_dnn_cost(A, y_train))))
+        idx_from += batch_size
+        idx_from = min(m, idx_from)
+        idx_to += batch_size
+        idx_to = min(m, idx_to)
+    return grads, params, vgrad, d_rms
+    
+# Train Model 
+print("Loading Training and Dev Data ")
+X2 = get_features(train_raw)
+
+labels = np.array(train_raw['label'])
+m = labels.shape[0]
+y = np.zeros((m,10))
+for j in range(10):
+    y[:,j]=(labels==j)*1
+# TODO: implement softmax as output layer 
+k = 38
+folds = 5
+oinst = 1
+h_layers = 4
+beta = 0.9
+np.random.seed(1)
+print("Cross Validation using {} folds".format(folds))
+print("Building Deep Network of {} Hidden Layer Groups".format(h_layers))
+print("Cross Validation ..")
+cv_groups = cross_validated(X2, folds)
+print("Done")
+alphas = np.linspace(0.00125, 0.00125, oinst)
+epsilons = np.linspace(0.76,0.78,oinst)
+gammas =  np.linspace(0.01,0.01,oinst)
+lambdas=  np.linspace(1.0,1.0,oinst)
+keep_probs=  np.linspace(0.99,0.99,oinst)
+alph_decays = np.linspace(0.9,0.9,oinst) 
+iterations = 100
+n_1 = []
+break_tol = 0.00001
+etscost = []
+etrcost= []
+seeds = []
+layers = []
+for j in range(oinst):
+    batch_processing = True
+    base_batch_size = 1024 # min size
+
+    print("Building Network")
+    X = X2 # Direct Map
+    n = [X.shape[1]]
+    acts = ['input']
+    gamma = [0]
+    for layer in range(h_layers):
+        n.append((17)**2) #((28-layer*3))**2)
+        acts.append('lReLU') #tanh')
+        gamma.append(np.sqrt(2/n[layer-1]))
+        print("Hidden Layer[{: ^3d}] n = {: >4}, Activation Fn [{: >8}], Weight init Factor = {:.2E}".format(
+            len(n)-1, n[-1], acts[-1], gamma[-1]))
+    #for layer in range(h_layers):
+    #    n.append((28)**2) #((28-layer*3))**2)
+    #    acts.append('lReLU') #tanh')
+    #    gamma.append(np.sqrt(2/n[layer-1]))
+    #    print("Hidden Layer[{:03d}] n = {}, Activation Fn [{}], Weight init Factor = {:3.2f}".format(
+    #        len(n)-1, n[-1], acts[-1], gamma[-1]))
+    layers.append(j+1)    
+    n.append(y.shape[1])
+    acts.append('softmax')
+    gamma.append(np.sqrt(1/n[layer-1]))
+    print("Output Layer n = {}, Activation Function [{}], Weight init Factor = {:3.2f}".format(
+            n[-1], acts[-1], gamma[-1]))
+    n_1.append(j+4)
+    np.random.seed(1)
+   
+    alpha = alphas[j]#0.166# 
+    _lambda = lambdas[j] # 0.5#
+    keep_prob = keep_probs[j]
+    epsilon = 0.76#epsilons[j] #0.02 
+    print("Hyper-parameters")
+    print("alpha = {:.2E}, # Epochs = {}, lambda = {:3.2f}, keep probability = {:3.2f} % ".format(
+        alpha, iterations, _lambda, keep_prob*100))
+    print("Momentum (Beta) = {:3.2f}".format(beta))
+
+    L = len(n) - 1
+
+    # Prepare Training and testing sets 
+    X_train = X[cv_groups[0][0],:].T 
+    y_train = y[cv_groups[0][0],:].T 
+    labels_train = labels[cv_groups[0][0]]
+    # Experiment - Filter based on linear correlation
+    
+    depth = 1024
+    print("Building Input Layer Initialization Filter, Depth = {}".format(depth))
+    filter1 = np.zeros((n[0],n[0]))
+    for dim in range(10):
+        for monomial in range(1,min(2, h_layers)):
+            X_sample = X_train[:,:depth].T**monomial
+            X_mean = np.reshape(np.mean(X_sample,axis=0),(1,-1))
+            y_sample = np.reshape(y_train[dim, :depth],(-1,1))
+
+            y_mean = np.mean(y_sample)
+            y_var = (y_sample - y_mean)*X_sample**0
+            numer = (np.dot((X_sample-X_mean).T,y_var))
+            denom = np.sqrt(np.sum(np.dot((X_sample-X_mean).T,(X_sample-X_mean))))*np.sqrt(np.dot((y_sample - y_mean).T,(y_sample - y_mean)))
+            filter1 += np.abs(np.diag((numer/denom)[:,0]))
+    filter1 /= np.linalg.norm(filter1)
+    filter2 = 1*(np.abs(filter1) > 0.0001 )
+    params, vgrad, d_rms = init_dnn_parameters(n, acts,gamma) #,np.abs(filter1))
+    #alpha /= np.linalg.norm(np.abs(filter1)) # Normalize alpha to match weight adjustment 
+    # Experiment 
+    
+    X_test = X[cv_groups[0][1],:].T 
+    y_test = y[cv_groups[0][1],:].T
+    print("Experiment [{}] - Eps = {}, Alph = {:3.2f}, Decay = {:3.2f}, lambda={:3.2f}".format(j, epsilon, alpha,alph_decays[j], _lambda))
+    print("k = {}, |X| = {}, max(i) = {}".format( k, X_test.shape[0], iterations))
+    #print("Keep Prob = {}%, gamma = {}".format(keep_prob*100, gamma))
+    print("Network Size {}".format(n))
+    print("Network Activation{}".format(acts))
+    cost = []
+    tcost=[]
+    print("Mini-Batch : [{}], Mini-Batch Size [{}]".format(batch_processing, base_batch_size))
+    print("Measuring Cost for [Training Set]",end="")
+    A, cache, params = forward_dnn_propagation(X_train, params)
+    cost.append(np.mean(get_dnn_cost(A, y_train)))
+    print(",[Dev. Set]")
+    A2, vectors, _ = forward_dnn_propagation(X_test, params)
+    tcost.append(get_dnn_cost(A2, y_test))
+    print("Pre-Training Cost")
+    print("i = {:3d}, trc = {:3.2f}, tsc={:3.2f}".format(-1,cost[-1],tcost[-1]))
+    print(" active alpha = {:.2E}".format(alpha))        
+    
+    for i in range(iterations):
+        if batch_processing:
+            #batch_power = np.random.randint(0,int(np.log2(2048/base_batch_size)))
+            batch_size = base_batch_size #* 2 ** batch_power
+            #print("Epoch [{}], batch size [{}] [pwr {}], Training".format(i, batch_size, batch_power))
+            grads, params, vgrad, d_rms = batch_back_propagation(X_train, 
+                                                   y_train, 
+                                                   params, 
+                                                   cache, 
+                                                   alpha * ( batch_size/2048),
+                                                   _lambda, 
+                                                   keep_prob,                                                  
+                                                   batch_size,
+                                                   beta **( batch_size/2048),
+                                                   vgrad,
+                                                   d_rms)
+            print("Epoch [{}], Evaluating, [Training] ".format(i),end="")
+            A, cache, params = forward_dnn_propagation(X_train, params)
+            cost.append(np.mean(get_dnn_cost(A, y_train)))
+            print(" Evaluating, [Dev] ")
+            A2, vectors, _ = forward_dnn_propagation(X_test, params)
+            tcost.append(get_dnn_cost(A2, y_test))
+            #batch_size *= 2
+        else:
+            A, cache = forward_dnn_propagation(X_train, params)
+            cost.append(get_dnn_cost(A, y_train))
+            grads, params= back_dnn_propagation(X_train, 
+                                                y_train, 
+                                                params, 
+                                                cache, 
+                                                alpha,
+                                                _lambda, 
+                                                keep_prob)
+            A2, vectors = forward_dnn_propagation(X_test, params)
+            tcost.append(get_dnn_cost(A2, y_test))
+        
+        if alpha*np.abs(np.linalg.norm(grads["dW"+str(L)])) < break_tol:
+            print("Reached Change Tolerance")
+            break
+        if i % 1 == 0:
+            alpha *= (1-alpha) #alph_decays[j]
+            print("---------------------------------------------------------------")
+            print("i = {:3d}, trc = {:3.2f}, tsc={:3.2f}, |dWL|_L = {:.2E}".format(i,cost[-1],
+                                                                   tcost[-1], 
+                                                                   alpha*np.abs(np.linalg.norm(grads["dW"+str(L)]))))
+            print(" active alpha = {:.2E}".format(alpha))
+            if 1==1:
+                print("Number Matching (Dev. Set)")
+                for num in range(10):
+                    y_hat = A2[num,:] > 0.5
+                    y_star = y_test[num,:]
+                    matched = np.sum((1-np.abs(y_star-y_hat))*y_star)
+                    tp = np.sum((y_hat == y_star) * y_star * 1)
+                    tn = np.sum((y_hat == y_star)* (1-y_star) * 1)
+                    fp = np.sum((y_hat == (1-y_star))*(1-y_star)*1)
+                    fn = np.sum((y_hat == (1-y_star))*y_star*1)
+                    distance = np.linalg.norm((y_star - A2[num,:])*y_star)
+                    m_test = sum(y_test[num,:]==1)
+                    y_size = y_test.shape[1]
+                    pct = matched/m_test
+                    print("[{}] Dst {:5.2f}".format(num, distance ), end='')
+                    print(" T+ve {: >6d}/{: <6d}, T-ve {: >6d}/{: <6d}, F+ve {: >6d}, F-ve {: >6d}".format(int(tp), 
+                                                                                int(np.sum(y_star)),
+                                                                                int(tn),
+                                                                                int(np.sum((1-y_star))),
+                                                                                int(fp),
+                                                                                int(fn)))
+                print("---------------------------------------------------------------")
+    etscost.append(tcost[-1])
+    etrcost.append(cost[-1])
+
+    
+    # Prepare Data For submission
+print("Preparing Data for submission")
+X_test = get_features(test_raw)
+print("Running Test Data On Model")
+A2, vectors, _ = forward_dnn_propagation(X_test.T, params)
+print("Output Vector Shape {}".format(A2.shape))
+
+data = np.clip(A2.T, 0,1)
+data = data.argmax(axis=1)
+#data = np.reshape(data,(-1,1))
+print(data.shape)
+#data[len(data),0] = 0 # Add missing entry 
+data = np.reshape(data,(-1,1))
+
+print("Prepared Output Vector Shape {}".format(data.shape))
+index = np.reshape(np.arange(1, data.shape[0]+1),(-1,1))
+s1 = pd.Series(data[:,0], index=index[:,0])
+s0 = pd.Series(index[:,0])
+df = pd.DataFrame(data = s1, index=index[:,0])
+df.index.name = 'ImageId'
+df.columns = ['Label']
+df.replace([np.inf, -np.inf, np.nan], 0)
+df = df.astype(int)
+file_name = "deep_nn.csv"
+print("Saving Data to [{}]".format(file_name))
+df.to_csv(file_name, sep=',')
+print("========= End ===========")
