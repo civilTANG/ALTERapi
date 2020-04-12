@@ -23,7 +23,8 @@ x.find('code.py')
 ```
 result
 
-```.......
+```
+.......
 
 Original API:np.dot(W, filter1)
 
@@ -33,6 +34,7 @@ Recommend API:np.einsum('ij,jm->im',W, filter1)
 
 lineno:46
 
-........```
+........
+```
 
 
