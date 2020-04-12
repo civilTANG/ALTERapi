@@ -4,19 +4,17 @@ from distutils.core import setup
 import setuptools
 
 setup(
-    name='apireplacement',  # 包的名字
-    version='0.0.1',  # 版本号
+    name='apireplacement',  
+    version='0.0.1', 
     description='a tool api_replacement that can help developers discover low-efficiency APIs in the code and recommend higher-efficiency APIs',  # 描述
-    author='tangshan',  # 作者
-    author_email='709166298@qq.com',  # 你的邮箱**
-    url='https://github.com/civilTANG/APIreplace',  # 可以写github上的地址，或者其他地址
-    packages=setuptools.find_packages(exclude=['apireplacement']),  # 包内需要引用的文件夹
+    author='tangshan',  
+    author_email='709166298@qq.com',  
+    url='https://github.com/civilTANG/APIreplace', 
+    packages=setuptools.find_packages(exclude=['apireplacement']), 
 
-    # 依赖包
+
     install_requires=[
         'astor',
-        're',
-        ' ast'
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
