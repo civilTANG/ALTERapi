@@ -11,7 +11,7 @@ The performance of data analytics programs has become one of the developers’ m
 # Installing
 To install the latest version 
 
-download`apireplacement-0.0.1.tar.gz`
+download`apireplacement-0.0.1.tar.gz` and then `pip install`
 
 `$ pip install apireplacement-0.0.1.tar.gz`
 
@@ -29,6 +29,14 @@ result
 ```
 .......
 
+original API:np.zeros((n[l], 1))
+
+Recommend API:np.empty((n[l], 1)); r2[:]= 0
+
+lineno:47
+
+.......
+
 Original API:np.dot(W, filter1)
 
 Recommend API:np.tensordot(np,W, filter1,axes=1)
@@ -38,4 +46,13 @@ Recommend API:np.einsum('ij,jm->im',W, filter1)
 lineno:46
 
 ........
+
+original API:df.astype(int)
+
+Recommend API:df.apply(int)
+
+lineno:502
+
+........
+
 ```
