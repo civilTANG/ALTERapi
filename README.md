@@ -1,6 +1,6 @@
 # api_replacement
 # Overview
-the performance of data analytics programs is becoming a major concern for developers nowadays. we study how API choices could improve data analytics performance while preserving functional equivalence.Based on natural language processing technology, we have discovered 49 pairs of replaceable API pairs on stackoverflow.Based on these findings, we have developed a tool`api_replacement` that can help developers discover low-efficiency APIs in the code and recommend higher-efficiency APIs.
+The performance of data analytics programs is becoming a major concern for developers nowadays. We study how API choices could improve data analytics performance while preserving functional equivalence.Based on natural language processing technology, we have discovered 49 pairs of replaceable API pairs on stackoverflow.We have developed a tool`api_replacement` that can help developers discover low-efficiency APIs in the code and recommend higher-efficiency APIs.
 
 `api_replacement` can help you finding  low-efficiency APIs from your code.
 `api_replacement` can recommend higher-efficiency APIs.
@@ -16,8 +16,22 @@ To install the latest development version from GitHub
 # Example
 Here is an example `test.py` using `api_replacement`
 ```python
-import replace_algorithm
-test = replace_algorithm('code_path')
-test.find()
+import api_replacement
+x = api_replacement.APIReplace('code.py')
+x.find('code.py')
 ```
+result
+
+`.......`
+
+`original API:np.dot(W, filter1)`
+
+`Recommend API:np.tensordot(np,W, filter1,axes=1)`
+
+`Recommend API:np.einsum('ij,jm->im',W, filter1)`
+
+`lineno:46`
+
+`........`
+
 
