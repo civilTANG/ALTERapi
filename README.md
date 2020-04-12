@@ -9,17 +9,19 @@ The performance of data analytics programs has become one of the developers’ m
 
 
 # Installing
-To install the latest version from GitHub
+To install the latest version 
 
-`$ pip install git+git://github.com/civilTANG/APIreplacement.git`
+dowmload`apireplacement.tar.gz`
+
+`$ pip install apireplacement.tar.gz`
 
 
 
 # Example
 Here is an example `test.py` using `api_replacement`
 ```python
-import api_replacement
-x = api_replacement.APIReplace('code.py') # https://www.kaggle.com/aawadall/deep-neural-net
+import apireplacement
+x = apireplacement.APIReplace('code.py') # https://www.kaggle.com/aawadall/deep-neural-net
 x.find('code.py')
 ```
 result
