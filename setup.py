@@ -18,12 +18,12 @@ setup(
     ],
     classifiers=[
         'Development Status :: 4 - Beta',
-        'Operating System :: Microsoft'  # 你的操作系统
+        'Operating System :: Microsoft'  
         'Intended Audience :: Developers',
-        'License :: OSI Approved :: BSD License',  # BSD认证
-        'Programming Language :: Python',  # 支持的语言
-        'Programming Language :: Python :: 3',  # python版本 。。。
-        'Programming Language :: Python :: 3.4',
+        'License :: OSI Approved :: BSD License',  
+        'Programming Language :: Python', 
+        'Programming Language :: Python :: 3',  
+        'Programming Language :: Python :: 3.4', 
         'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
         'Topic :: Software Development :: Libraries'
