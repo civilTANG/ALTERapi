@@ -10,7 +10,7 @@ setup(
     author='tangshan',  
     author_email='709166298@qq.com',  
     url='https://github.com/civilTANG/APIreplace', 
-    packages=setuptools.find_packages(exclude=['apireplacement']), 
+    packages=setuptools.find_packages(exclude=[]), 
 
 
     install_requires=[
