@@ -27,7 +27,7 @@ x.recommend()
 
 print("dynamic mode")
 x = alterapi.APIReplace('code.py'，option= 'dynamic' )
-x.recommend())
+x.recommend()
 ```
 result
 
