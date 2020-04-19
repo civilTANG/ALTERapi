@@ -1,14 +1,36 @@
 import re
 import ast, astor
 from ast import Attribute, Name
-
+import os
+import subprocess
 api_name = ['c_', 'iloc',  'loc', 'apply','sum', 'count_nonzero','hstack','array', 'where', 'transpose', 'query',
             'vstack','zeros','query','apply','map','crosstab','where','atleast_2d','tile','loc',
             'to_datetime','array','hstack','concatenate','c_','iloc','astype','array','str',
             'fillna','norm','where','array','column_stack','count_nonzero','nonzero','transpose',
             'replace','cumprod','tensordot','iterrows','full','query','arange',
             'array','column_stack','dot','full','hstack','ones','vstack','zeros','ix','dot']
+# template for replacement
 
+template = """    
+import os, timeit, csv\n
+r1 = {} # original code \n
+r2 = {}  # api replace \n 
+if isinstance(r1, pd.Series):\n
+    assert r1.equals(r2)\n    
+else:\n
+    assert np.allclose(r1,r2)\n
+def func1():\n
+    {}\n
+def func2():\n
+    {}\n
+number_of_runs = 100 \n
+t1 = timeit.timeit(func1, number=number_of_runs) / number_of_runs\n
+t2 = timeit.timeit(func2, number=number_of_runs) / number_of_runs\n
+with open("../optimization.csv", "a+") as f:\n
+     writer = csv.writer(f)\n
+     writer.writerow([{}, {}, {}, t1, t2])\n
+os._exit(0)\n
+     """
 class CallParser(ast.NodeVisitor):
     def __init__(self):
         self.attrs = []
@@ -60,7 +82,7 @@ class CodeInstrumentator(ast.NodeTransformer):
             elif isinstance(value, ast.AST):
                 self.visit(value)
 
-# situation one
+
 def replace_one(node):
 
         oldstmt = astor.to_source(node).strip()
@@ -131,7 +153,7 @@ def replace_one(node):
         elif '.iloc' in oldstmt:
             newstmt = oldstmt.replace('iloc', 'iat')
             return newstmt
-# situation two
+
 def replace_two(node):
         oldstmt = astor.to_source(node).strip()
         # np.column_stack -> np.vstack
@@ -182,8 +204,6 @@ def replace_two(node):
                 return newstmt
 
 
-
-#situation three
 def replace_three(node):
         oldstmt = astor.to_source(node).strip()
         # np.array ->np.fromiter
@@ -206,7 +226,7 @@ def replace_three(node):
         """elif re.match('.*map.*lambda.*', oldstmt) is None:
             newstmt = oldstmt.replace('map', 'replace')
             return newstmt"""
-# situation four
+
 def replace_four(node):
         oldstmt = astor.to_source(node).strip()
         # np.where->pd.DataFrame.apply
@@ -272,10 +292,11 @@ def replace_four(node):
             agrument2 = re.match('np\.sum\((.*)\,(.*)\)$', oldstmt).group(2)
             if ('axis=1' in agrument2) or ('axis=-1' in agrument2):
                 newstmt = "np.einsum('ij->i'," + agrument1 + ")"
-                print(newstmt)
+                return newstmt
             elif ('axis=-2' in agrument2) or ('axis=0' in agrument2):
                 newstmt = "np.einsum('ij->j'," + agrument1 + ")"
-            return newstmt
+                return newstmt
+
         # np.sum ->np.einsum
         elif re.match('np\.sum\((.*)\)$', oldstmt):
             agrument1 = re.match('np\.sum\((.*)\)$', oldstmt).group(1)
@@ -288,11 +309,14 @@ def replace_four(node):
             agrument2 = re.match('(.*)\.sum\((.*)\)$', oldstmt).group(2)
             if ('axis=1' in agrument2) or ('axis=-1' in agrument2):
                 newstmt = "np.einsum('ij->i'," + agrument1 + ")"
+                return newstmt
             elif ('axis=-2' in agrument2) or ('axis=0' in agrument2):
                 newstmt = "np.einsum('ij->j'," + agrument1 + ")"
+                return newstmt
             else:
                 newstmt = "np.einsum('i->'," + agrument1 + ")"
-            return newstmt
+                return newstmt
+
 
 
 
@@ -360,12 +384,14 @@ def replace_four(node):
             return newstmt
 
 class APIReplace(object):
-    def __init__(self, code_path):
+    def __init__(self, code_path, option = 'static'):
         self.code_path = code_path
+        self.option = option
 
-    def find(self,code_path):
+    def recommend(self):
         # open file
-        with open(code_path, 'r', encoding='UTF-8') as file:
+        cnt = 0
+        with open(self.code_path, 'r', encoding='UTF-8') as file:
             content = file.read()
         file.close()
 
@@ -375,17 +401,79 @@ class APIReplace(object):
         v.visit(tree)
 
         for candidate in v.attrs:
-            oldstmt = astor.to_source(candidate).strip()
-            lineno = candidate.lineno
-            print("original API:" +oldstmt)
-            if replace_one(candidate):
-                print('Recommend API-one:' + replace_one(candidate))
-            if replace_two(candidate):
-                print('Recommend API-two:' + replace_two(candidate))
-            if replace_three(candidate):
-                print('Recommend API-three:' + replace_three(candidate))
-            if replace_four(candidate):
-                print('Recommend API-four:' + replace_four(candidate))
+                oldstmt = astor.to_source(candidate).strip()
+                lineno = candidate.lineno
+                if self.option == 'static':
+                    if replace_one(candidate) or replace_two(candidate) or replace_three(candidate) or replace_four(candidate):
+                        print("original API:" +oldstmt)
+                    if replace_one(candidate):
+                        print('Recommend API:' + replace_one(candidate))
+                    if replace_two(candidate):
+                        print('Recommend API:' + replace_two(candidate))
+                    if replace_three(candidate):
+                        print('Recommend API:' + replace_three(candidate))
+                    if replace_four(candidate):
+                        print('Recommend API:' + replace_four(candidate))
+                    if replace_one(candidate) or replace_two(candidate) or replace_three(candidate) or replace_four(candidate):
+                        print("lineno:{}".format(lineno))
+                        print('###############################################')
 
-            print("lineno:{}".format(lineno))
-            print('###############################################')
+                if self.option == 'dynamic':
+                    if replace_one(candidate) or replace_two(candidate) or replace_three(candidate) or replace_four(candidate):
+                        print("original API:" +oldstmt)
+                    if replace_one(candidate):
+                        newstmt = replace_one(candidate)
+                        print('Recommend API:' + newstmt)
+                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                    if replace_two(candidate):
+                        newstmt = replace_two(candidate)
+                        print('Recommend API:' + newstmt)
+                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                    if replace_three(candidate):
+                        newstmt = replace_three(candidate)
+                        print('Recommend API:' + newstmt)
+                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                    if replace_four(candidate):
+                        newstmt = replace_four(candidate)
+                        print('Recommend API:' + newstmt)
+                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                    if replace_one(candidate) or replace_two(candidate) or replace_three(candidate) or replace_four(candidate):
+                        cnt += 1
+                        print("lineno:{}".format(lineno))
+                        print('###############################################')
+
+    def add_source(self, oldstmt, newstmt, content, lineno, cnt):
+        to_add = template.format(oldstmt, newstmt, oldstmt, newstmt, lineno, '"{}"'.format(oldstmt),
+                                 '"{}"'.format(newstmt))
+        # fill in the template
+        to_insert = ast.parse(to_add)
+        # insert the new node
+        temp_tree = ast.parse(content)
+        CodeInstrumentator(lineno, to_insert).visit(temp_tree)
+        instru_source = astor.to_source(temp_tree)
+        des_path = os.path.join(os.path.dirname(self.code_path), 'code_{}.py'.format(cnt))
+        with open(des_path, 'w') as wf:
+            print(des_path)
+            wf.write(instru_source)
+        wf.close()
+        self.execute_code(des_path)
+
+    def execute_code(self, des_path):
+        try:
+            cmd = "python " + des_path
+            print("executing:" + des_path)
+            p = subprocess.Popen(cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            output, err = p.communicate(timeout=600)
+            err = str(err).split('\\r\\n')
+            if p.returncode == 1:
+                error_type = err[len(err) - 2]
+                print("execution interrupt:" + error_type)
+
+        except Exception as e:
+                print(e)
+
+
+
+
+
+
