@@ -21,12 +21,18 @@ download`alterapi-0.0.1.tar.gz` and then `pip install`
 Here is an example `test.py` using `alterapi`
 ```python
 import alterapi
-x = alterapi.APIReplace('code.py') # https://www.kaggle.com/aawadall/deep-neural-net
-x.find('code.py')
+print("static mode")
+x = alterapi.APIReplace('code.py'，option= 'static' )
+x.recommend()
+
+print("dynamic mode")
+x = alterapi.APIReplace('code.py'，option= 'dynamic' )
+x.recommend())
 ```
 result
 
 ```
+static mode
 .......
 
 original API:np.zeros((n[l], 1))
