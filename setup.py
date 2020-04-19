@@ -6,7 +6,7 @@ import setuptools
 setup(
     name='apireplacement',  
     version='0.0.1', 
-    description='a tool api_replacement that can help developers discover low-efficiency APIs in the code and recommend higher-efficiency APIs',  # 描述
+    description='a tool api_replacement that can help developers discover low-efficiency APIs in the code and recommend higher-efficiency APIs', 
     author='tangshan',  
     author_email='709166298@qq.com',  
     url='https://github.com/civilTANG/APIreplace', 
