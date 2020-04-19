@@ -9,8 +9,8 @@ api_name = ['c_', 'iloc',  'loc', 'apply','sum', 'count_nonzero','hstack','array
             'fillna','norm','where','array','column_stack','count_nonzero','nonzero','transpose',
             'replace','cumprod','tensordot','iterrows','full','query','arange',
             'array','column_stack','dot','full','hstack','ones','vstack','zeros','ix','dot']
-# template for replacement
 
+# template for replacement
 template = """    
 import os, timeit, csv\n
 r1 = {} # original code \n
@@ -31,6 +31,8 @@ with open("../optimization.csv", "a+") as f:\n
      writer.writerow([{}, {}, {}, t1, t2])\n
 os._exit(0)\n
      """
+
+
 class CallParser(ast.NodeVisitor):
     def __init__(self):
         self.attrs = []
@@ -83,8 +85,95 @@ class CodeInstrumentator(ast.NodeTransformer):
                 self.visit(value)
 
 
-def replace_one(node):
+class APIReplace(object):
+    def __init__(self, code_path, option = 'static'):
+        self.code_path = code_path
+        self.option = option
 
+    def recommend(self):
+        # open file
+        cnt = 0
+        with open(self.code_path, 'r', encoding='UTF-8') as file:
+            content = file.read()
+        file.close()
+
+        # parse
+        tree = ast.parse(content)  # parse the code into ast_tree
+        v = CallParser()   # find the potential api
+        v.visit(tree)
+
+        for candidate in v.attrs:
+                oldstmt = astor.to_source(candidate).strip()
+                lineno = candidate.lineno
+                if self.option == 'static':
+                    if self.replace_one(candidate) or self.replace_two(candidate) or self.replace_three(candidate) or self.replace_four(candidate):
+                        print("original API:" +oldstmt)
+                    if self.replace_one(candidate):
+                        print('Recommend API:' + self.replace_one(candidate))
+                    if self.replace_two(candidate):
+                        print('Recommend API:' + self.replace_two(candidate))
+                    if self.replace_three(candidate):
+                        print('Recommend API:' + self.replace_three(candidate))
+                    if self.replace_four(candidate):
+                        print('Recommend API:' + self.replace_four(candidate))
+                    if self.replace_one(candidate) or self.replace_two(candidate) or self.replace_three(candidate) or self.replace_four(candidate):
+                        print("lineno:{}".format(lineno))
+                        print('###############################################')
+
+                if self.option == 'dynamic':
+                    if self.replace_one(candidate) or self.replace_two(candidate) or self.replace_three(candidate) or self.replace_four(candidate):
+                        print("original API:" +oldstmt)
+                    if self.replace_one(candidate):
+                        newstmt = self.replace_one(candidate)
+                        print('Recommend API:' + newstmt)
+                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                    if self.replace_two(candidate):
+                        newstmt = self.replace_two(candidate)
+                        print('Recommend API:' + newstmt)
+                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                    if self.replace_three(candidate):
+                        newstmt = self.replace_three(candidate)
+                        print('Recommend API:' + newstmt)
+                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                    if self.replace_four(candidate):
+                        newstmt = self.replace_four(candidate)
+                        print('Recommend API:' + newstmt)
+                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                    if self.replace_one(candidate) or self.replace_two(candidate) or self.replace_three(candidate) or self.replace_four(candidate):
+                        cnt += 1
+                        print("lineno:{}".format(lineno))
+                        print('###############################################')
+
+    def add_source(self, oldstmt, newstmt, content, lineno, cnt):
+        to_add = template.format(oldstmt, newstmt, oldstmt, newstmt, lineno, '"{}"'.format(oldstmt),
+                                 '"{}"'.format(newstmt))
+        # fill in the template
+        to_insert = ast.parse(to_add)
+        # insert the new node
+        temp_tree = ast.parse(content)
+        CodeInstrumentator(lineno, to_insert).visit(temp_tree)
+        instru_source = astor.to_source(temp_tree)
+        des_path = os.path.join(os.path.dirname(self.code_path), 'code_{}.py'.format(cnt))
+        with open(des_path, 'w') as wf:
+            wf.write(instru_source)
+        wf.close()
+        self.execute_code(des_path)
+
+    def execute_code(self, des_path):
+        try:
+            cmd = "python " + des_path
+            print("executing:" + des_path)
+            p = subprocess.Popen(cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            output, err = p.communicate(timeout=600)
+            err = str(err).split('\\r\\n')
+            if p.returncode == 1:
+                error_type = err[len(err) - 2]
+                print("execution interrupt:" + error_type)
+
+        except Exception as e:
+                print(e)
+
+    def replace_one(self, node):
         oldstmt = astor.to_source(node).strip()
 
         #   pd.Series.str ->pd.Series.map
@@ -93,7 +182,7 @@ def replace_one(node):
             return newstmt
         #  pd.Series.astype -> pd.Series.apply
         elif '.astype' in oldstmt:
-            newstmt = oldstmt.replace('astype','apply')
+            newstmt = oldstmt.replace('astype', 'apply')
             return newstmt
         # np.hstack -> np.concatenate
         elif '.arrange' in oldstmt:
@@ -112,7 +201,7 @@ def replace_one(node):
             newstmt = oldstmt.replace("np.ones", "np.empty") + "; r2.fill(1)"
             return newstmt
         # np.zeros -> np.empty
-        elif '.zeros'in oldstmt:
+        elif '.zeros' in oldstmt:
             newstmt = oldstmt.replace("zeros", "empty") + "; r2[:]= 0"
             return newstmt
         # np.nonzero -> np.where
@@ -154,7 +243,7 @@ def replace_one(node):
             newstmt = oldstmt.replace('iloc', 'iat')
             return newstmt
 
-def replace_two(node):
+    def replace_two(self, node):
         oldstmt = astor.to_source(node).strip()
         # np.column_stack -> np.vstack
         if '.column_stack' in oldstmt:
@@ -203,8 +292,7 @@ def replace_two(node):
                 newstmt = 'np.tensordot(' + agr1 + ',' + agr2 + ',axes=1)'
                 return newstmt
 
-
-def replace_three(node):
+    def replace_three(self, node):
         oldstmt = astor.to_source(node).strip()
         # np.array ->np.fromiter
         if re.match('np.array\(.*dtype.*\)$', oldstmt):
@@ -227,7 +315,7 @@ def replace_three(node):
             newstmt = oldstmt.replace('map', 'replace')
             return newstmt"""
 
-def replace_four(node):
+    def replace_four(self, node):
         oldstmt = astor.to_source(node).strip()
         # np.where->pd.DataFrame.apply
         if re.match('np.where\(.*\,.*\,.*\)$', oldstmt):
@@ -237,7 +325,8 @@ def replace_four(node):
                     condition = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(1)
                     t = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(2)
                     f = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(3)
-                    newstmt = 'pd.DataFrame('+o+').apply(lambda x : ' + condition.replace(o, 'x') + ').replace({True:'+t+',False:'+f+'}).values.flatten()'
+                    newstmt = 'pd.DataFrame(' + o + ').apply(lambda x : ' + condition.replace(o,
+                                                                                              'x') + ').replace({True:' + t + ',False:' + f + '}).values.flatten()'
                     return newstmt
 
         # np.where->pd.Series.map
@@ -248,7 +337,8 @@ def replace_four(node):
                     condition = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(1)
                     t = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(2)
                     f = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(3)
-                    newstmt = '(' + o + ').map(lambda x :' + t + ' if ' + condition.replace(o, 'x') + ' else ' + f + ').values'
+                    newstmt = '(' + o + ').map(lambda x :' + t + ' if ' + condition.replace(o,
+                                                                                            'x') + ' else ' + f + ').values'
                     return newstmt
 
         # np.hstack -> np.concatenate
@@ -365,7 +455,9 @@ def replace_four(node):
             f = re.match('(.*)\.apply\(lambda(.*):(.*)if(.*)else\s(.*)\,.*\)$', oldstmt).group(5)
             condition = re.match('(.*)\.apply\(lambda(.*):(.*)if(.*).*else\s(.*)\,.*\)$', oldstmt).group(4)
             z = re.match('(.*)\.apply\(lambda(.*):(.*)if(.*\]).*else\s(.*)\,.*\)$', oldstmt).group(4)
-            newstmt = z.replace(x, o) + '.apply(lambda ' + x + ':' + t.replace(z, x) + 'if ' + condition.replace(z,x) + 'else ' + f.replace(z, x) + ')'
+            newstmt = z.replace(x, o) + '.apply(lambda ' + x + ':' + t.replace(z, x) + 'if ' + condition.replace(z,
+                                                                                                                 x) + 'else ' + f.replace(
+                z, x) + ')'
             return newstmt
         # pd.DataFrame.apply -> np.where
         elif re.match('.*apply.*lambda.*if.*else.*', oldstmt) and 'axis=1' in oldstmt:
@@ -382,95 +474,6 @@ def replace_four(node):
             agrument2 = re.match('np.full\((.*)\,\s0\,(.*)\)$', oldstmt).group(2)
             newstmt = 'np.zeros(' + agrument1 + ',' + agrument2 + ')'
             return newstmt
-
-class APIReplace(object):
-    def __init__(self, code_path, option = 'static'):
-        self.code_path = code_path
-        self.option = option
-
-    def recommend(self):
-        # open file
-        cnt = 0
-        with open(self.code_path, 'r', encoding='UTF-8') as file:
-            content = file.read()
-        file.close()
-
-        # parse
-        tree = ast.parse(content)  # parse the code into ast_tree
-        v = CallParser()   # find the potential api
-        v.visit(tree)
-
-        for candidate in v.attrs:
-                oldstmt = astor.to_source(candidate).strip()
-                lineno = candidate.lineno
-                if self.option == 'static':
-                    if replace_one(candidate) or replace_two(candidate) or replace_three(candidate) or replace_four(candidate):
-                        print("original API:" +oldstmt)
-                    if replace_one(candidate):
-                        print('Recommend API:' + replace_one(candidate))
-                    if replace_two(candidate):
-                        print('Recommend API:' + replace_two(candidate))
-                    if replace_three(candidate):
-                        print('Recommend API:' + replace_three(candidate))
-                    if replace_four(candidate):
-                        print('Recommend API:' + replace_four(candidate))
-                    if replace_one(candidate) or replace_two(candidate) or replace_three(candidate) or replace_four(candidate):
-                        print("lineno:{}".format(lineno))
-                        print('###############################################')
-
-                if self.option == 'dynamic':
-                    if replace_one(candidate) or replace_two(candidate) or replace_three(candidate) or replace_four(candidate):
-                        print("original API:" +oldstmt)
-                    if replace_one(candidate):
-                        newstmt = replace_one(candidate)
-                        print('Recommend API:' + newstmt)
-                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
-                    if replace_two(candidate):
-                        newstmt = replace_two(candidate)
-                        print('Recommend API:' + newstmt)
-                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
-                    if replace_three(candidate):
-                        newstmt = replace_three(candidate)
-                        print('Recommend API:' + newstmt)
-                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
-                    if replace_four(candidate):
-                        newstmt = replace_four(candidate)
-                        print('Recommend API:' + newstmt)
-                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
-                    if replace_one(candidate) or replace_two(candidate) or replace_three(candidate) or replace_four(candidate):
-                        cnt += 1
-                        print("lineno:{}".format(lineno))
-                        print('###############################################')
-
-    def add_source(self, oldstmt, newstmt, content, lineno, cnt):
-        to_add = template.format(oldstmt, newstmt, oldstmt, newstmt, lineno, '"{}"'.format(oldstmt),
-                                 '"{}"'.format(newstmt))
-        # fill in the template
-        to_insert = ast.parse(to_add)
-        # insert the new node
-        temp_tree = ast.parse(content)
-        CodeInstrumentator(lineno, to_insert).visit(temp_tree)
-        instru_source = astor.to_source(temp_tree)
-        des_path = os.path.join(os.path.dirname(self.code_path), 'code_{}.py'.format(cnt))
-        with open(des_path, 'w') as wf:
-            print(des_path)
-            wf.write(instru_source)
-        wf.close()
-        self.execute_code(des_path)
-
-    def execute_code(self, des_path):
-        try:
-            cmd = "python " + des_path
-            print("executing:" + des_path)
-            p = subprocess.Popen(cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            output, err = p.communicate(timeout=600)
-            err = str(err).split('\\r\\n')
-            if p.returncode == 1:
-                error_type = err[len(err) - 2]
-                print("execution interrupt:" + error_type)
-
-        except Exception as e:
-                print(e)
 
 
 
