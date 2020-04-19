@@ -62,3 +62,13 @@ lineno:502
 ........
 
 ```
+```
+dynamic mode
+............
+original API:np.zeros((n[l], 1))
+Recommend API:np.empty((n[l], 1)); r2[:]= 0
+executing:code_1.py
+lineno:47
+47,"np.zeros((n[l], 1))","np.empty((n[l], 1)); r2[:]= 0",7.540000000005875e-07,1.1679999999980595e-06
+.......
+```
