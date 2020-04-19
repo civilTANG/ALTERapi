@@ -4,7 +4,7 @@ from distutils.core import setup
 import setuptools
 
 setup(
-    name='apireplacement',  
+    name='alterapi',  
     version='0.0.1', 
     description='a tool api_replacement that can help developers discover low-efficiency APIs in the code and recommend higher-efficiency APIs', 
     author='tangshan',  
