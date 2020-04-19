@@ -1,4 +1,4 @@
-# alterapi
+# ALTERAPI
 
 # Overview
 The performance of data analytics programs has become one of the developers’ major concerns nowadays. We study how API choices could improve data analytics performance while preserving functional equivalence.Based on the natural language processing technology, we have discovered 49 pairs of replaceable API pairs on stackoverflow.We have developed a tool`alterapi` that can help developers discover low-efficiency APIs in the code and recommend higher-efficiency APIs.
