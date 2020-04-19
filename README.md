@@ -66,9 +66,31 @@ lineno:502
 dynamic mode
 ............
 original API:np.zeros((n[l], 1))
+
 Recommend API:np.empty((n[l], 1)); r2[:]= 0
+
 executing:code_1.py
+
+original time: 7.540000000005875e-07 Recommend time: 1.1679999999980595e-06
+
 lineno:47
-47,"np.zeros((n[l], 1))","np.empty((n[l], 1)); r2[:]= 0",7.540000000005875e-07,1.1679999999980595e-06
+
+
+.......
+original API:np.sum(t, axis=0)
+
+Recommend API:(t).sum( axis=0)
+
+executing:code_2.py
+
+original time: 0.00019147699999999546, Recommend time:0.00019597100000000366
+
+Recommend API:np.einsum('ij->j',t)
+
+executing:code_2.py
+
+original time: 0.0001643390000000089, Recommend time: 0.00024376200000000736
+
+lineno:74
 .......
 ```
