@@ -11,18 +11,22 @@ The performance of data analytics programs has become one of the developers’ m
 # Installing
 To install the latest version 
 
-download`alterapi-0.0.1.tar.gz` and then `pip install`
+download`alterapi-0.0.2.tar.gz` and then `pip install`
 
-`$ pip install alterapi-0.0.1.tar.gz`
+`$ pip install alterapi-0.0.2.tar.gz`
 
 
 
 # Example
 Here is an example `test.py` using `alterapi`
 ```python
+'''alterapi has two mode.
+  'static mode'  just recommend api but  doesn't give execution time.
+  'dynamic'mode' not only recommend api but also give execution time.
+  '''
 import alterapi
 print("static mode")
-x = alterapi.APIReplace('code.py'，option= 'static' )
+x = alterapi.APIReplace('code.py'，option= 'static' ) 
 x.recommend()
 
 print("dynamic mode")
