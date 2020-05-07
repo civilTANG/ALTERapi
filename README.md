@@ -20,10 +20,10 @@ download`alterapi-0.0.2.tar.gz` and then `pip install`
 # Example
 Here is an example `test.py` using `alterapi`
 ```python
-'''alterapi has two mode.
-  'static mode'  just recommend api but  doesn't give execution time.
-  'dynamic'mode' not only recommend api but also give execution time.
-  '''
+alterapi has two mode.
+'static mode'  just recommend api but  doesn't give execution time.
+'dynamic'mode' not only recommend api but also give execution time.
+  
 import alterapi
 print("static mode")
 x = alterapi.APIReplace('code.py'，option= 'static' ) 
