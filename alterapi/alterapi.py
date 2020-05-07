@@ -1,20 +1,23 @@
 import re
-import ast, astor
+import ast,astor
 from ast import Attribute, Name
 import os,csv
 import subprocess
 
 api_name = ['c_', 'iloc',  'loc', 'apply','sum', 'count_nonzero','hstack','array', 'where', 'transpose', 'query',
             'vstack','zeros','query','apply','map','crosstab','where','atleast_2d','tile','loc',
-            'to_datetime','array','hstack','concatenate','c_','iloc','astype','array','str',
+            'to_datetime','array','hstack','concatenate','iloc','astype','array','str',
             'fillna','norm','where','array','column_stack','count_nonzero','nonzero','transpose',
-            'replace','cumprod','tensordot','iterrows','full','query','arange',
-            'array','column_stack','dot','full','hstack','ones','vstack','zeros','ix','dot']
+            'replace','cumprod','tensordot','iterrows','query','arange','iat','argmax',
+            'array','column_stack','dot','full','hstack','ones','vstack','zeros','ix','dot','at','append']
 
-api_pair = {'astype': 'apply','column_stack': 'transpose',
+api_pair = {'astype': 'apply', 'column_stack': 'transpose',
             'loc': 'ix', 'transpose': 'column_stack',
-            'ix': 'loc', 'where': 'nonzereo', 'nonzereo': 'where',
-            'apply': 'map', 'query': 'loc', 'replace': 'map'}
+            'ix': 'loc', 'where': 'nonzero', 'nonzero': 'where',
+            'apply': 'map', 'query': 'loc', 'replace': 'map',
+            'at': 'loc','map': 'apply', 'iloc': 'loc','iat': 'iloc',
+            'map': 'replace','fillna': 'combine_first', 'append': 'hstack'
+            ,'hstack':'c_', 'astype': 'map', 'array': 'hstack'}
 # template for replacement
 template = """    
 import os, timeit, csv\n
@@ -34,7 +37,7 @@ def func2():\n
 number_of_runs = 100 \n
 t1 = timeit.timeit(func1, number=number_of_runs) / number_of_runs\n
 t2 = timeit.timeit(func2, number=number_of_runs) / number_of_runs\n
-with open("../optimization.csv", "w+") as f:\n
+with open("optimization.csv", "a+") as f:\n
      writer = csv.writer(f)\n
      writer.writerow([{},{},{},t1, t2])\n
 os._exit(0)\n
@@ -121,10 +124,11 @@ class APIReplace(object):
         for candidate in v.attrs:
                 oldstmt = astor.to_source(candidate).strip()
                 lineno = candidate.lineno
-                conqs1 = self.replace_one(candidate,names[index])
+                conqs1 = self.replace_one(candidate, names[index])
                 conqs2 = self.replace_two(candidate)
                 conqs3 = self.replace_three(candidate)
                 conqs4 = self.replace_four(candidate)
+                print(oldstmt)
                 if self.option == 'static':
                     if conqs1 or conqs2 or conqs3 or conqs4:
                         print("original API:" + oldstmt)
@@ -138,7 +142,7 @@ class APIReplace(object):
                         print('Recommend API:' + conqs4)
                     if conqs1 or conqs2 or conqs3 or conqs4:
                         print("lineno:{}".format(lineno))
-                        print('###############################################')
+                        print('#####################################################################')
 
                 if self.option == 'dynamic':
                     if conqs1 or conqs2 or conqs3 or conqs4:
@@ -191,13 +195,14 @@ class APIReplace(object):
                 error_type = err[len(err) - 2]
                 print("execution interrupt:" + error_type)
             else:
-                with open("../optimization.csv", "r") as f:
+                with open("optimization.csv", "r") as f:
                     reader = csv.reader(f)
-                    for row in reader:
-                        t1 = row[3]
-                        t2 = row[4]
-                        print('origin time:{} , recommend time:{}'.format(t1, t2))
-                        break
+                    rows = [row for row in reader]
+                    row = rows[-2]
+                    t1 = row[3]
+                    t2 = row[4]
+                    print('origin time:{} , recommend time:{}'.format(t1, t2))
+
                 f.close()
 
 
@@ -263,12 +268,14 @@ class APIReplace(object):
             agrument3 = re.match('np.full\((.*)\,(.*)\,(.*)\)$', oldstmt).group(3)
             newstmt = 'np.empty(' + agrument1 + ',' + agrument3 + ') ; r2[:] =' + agrument2
             return newstmt
+
         # np.sum ->np.ndarray.sum
         elif '.sum' in oldstmt:
             if re.match('np\.sum\(.*\,.*\)$', oldstmt):
                 agrument1 = re.match('np\.sum\((.*)\,(.*)\)$', oldstmt).group(1)
                 agrument2 = re.match('np\.sum\((.*)\,(.*)\)$', oldstmt).group(2)
-            elif re.match('np\.sum\((.*)\)$', oldstmt):
+
+            else:
                 agrument1 = re.match('np\.sum\((.*)\)$', oldstmt).group(1)
                 agrument2 = ""
             newstmt = '(' + agrument1 + ').sum(' + agrument2 + ')'
@@ -315,7 +322,7 @@ class APIReplace(object):
                     t = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(2)
                     f = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(3)
                     newstmt = 'pd.DataFrame(' + o + ').apply(lambda x : ' + condition.replace(o,
-                                                                                              'x') + ').replace({True:' + t + ',False:' + f + '}).values.flatten()'
+    'x') + ').replace({True:' + t + ',False:' + f + '}).values.flatten()'
                     return newstmt
 
         # np.where->pd.Series.map
@@ -463,6 +470,11 @@ class APIReplace(object):
             agrument2 = re.match('np.full\((.*)\,\s0\,(.*)\)$', oldstmt).group(2)
             newstmt = 'np.zeros(' + agrument1 + ',' + agrument2 + ')'
             return newstmt
+
+
+
+
+
 
 
 
