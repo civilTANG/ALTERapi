@@ -1,8 +1,11 @@
+
 import re
 import ast,astor
 from ast import Attribute, Name
 import os,csv
 import subprocess
+import numpy as np
+import pandas as pd
 
 api_name = ['c_', 'iloc',  'loc', 'apply','sum', 'count_nonzero','hstack','array', 'where', 'transpose', 'query',
             'vstack','zeros','query','apply','map','crosstab','where','atleast_2d','tile','loc',
@@ -11,22 +14,32 @@ api_name = ['c_', 'iloc',  'loc', 'apply','sum', 'count_nonzero','hstack','array
             'replace','cumprod','tensordot','iterrows','query','arange','iat','argmax',
             'array','column_stack','dot','full','hstack','ones','vstack','zeros','ix','dot','at','append']
 
-api_pair = {'astype': 'apply', 'column_stack': 'transpose',
+# direct replacement
+api_pair0 = {'astype': 'apply', 'column_stack': 'transpose',
             'loc': 'ix', 'transpose': 'column_stack',
-            'ix': 'loc', 'where': 'nonzero', 'nonzero': 'where',
-            'apply': 'map', 'query': 'loc', 'replace': 'map',
-            'at': 'loc','map': 'apply', 'iloc': 'loc','iat': 'iloc',
-            'map': 'replace','fillna': 'combine_first', 'append': 'hstack'
-            ,'hstack':'c_', 'astype': 'map', 'array': 'hstack'}
+            'ix': 'loc', 'nonzero': 'where', 'apply': 'map',
+             'query': 'loc', 'replace': 'map',
+            'at': 'loc', 'iloc': 'loc', 'iat': 'iloc',
+            'map': 'replace', 'fillna': 'combine_first',
+             'append': 'hstack', 'hstack': 'c_', 'array': 'hstack','astype': 'map', }
+
+api_pair1 ={'where': 'nonzero'}
+
+
+api_pair2 = {}
+
+api_pair3 = {'where': ['apply', 'map']}
+
+# matrix operation
+api_pair4 = {'sum': 'einsum', }
 # template for replacement
 template = """    
 import os, timeit, csv\n
 r1 = {} # original code \n
 r2 = {}  # api replace \n 
-if isinstance(r1, pd.Series):\n
-    assert r1.equals(r2)\n
+
      
-if isinstance(r1, pd.DataFrame):\n
+if (isinstance(r1, pd.Series) and isinstance(r2, pd.Series)) or (isinstance(r1, pd.DataFrame) and isinstance(r2, pd.DataFrame)):\n
     assert r1.equals(r2)\n   
 else:\n
     assert np.allclose(r1,r2)\n
@@ -124,11 +137,31 @@ class APIReplace(object):
         for candidate in v.attrs:
                 oldstmt = astor.to_source(candidate).strip()
                 lineno = candidate.lineno
+                if isinstance(candidate, ast.Call):
+                    number_agrs = len(candidate.args)
+                    if number_agrs == 1:
+                        agr1 = candidate.args
+                        newstmt = self.replace_agr1(oldstmt,agr1,names[index])
+                        print(agr1)
+                    elif number_agrs == 2:
+                        agr1, agr2 = candidate.args
+                        print(agr1, agr2)
+                    elif number_agrs == 3:
+                        agr1, agr2, agr3 = candidate.args
+                        for i in range(0, len(api_pair3[names[index]])):
+                            newstmt = self.replace_agr3(oldstmt, agr1, agr2, agr3, names[index], api_pair3[names[index]][i])
+                            print(newstmt)
+                        print(agr1, agr2, agr3)
+                    else:
+                        print('No ability deal with this situation')
+
+                    print(oldstmt)
+                    #print(ast.dump(candidate))
+                continue
                 conqs1 = self.replace_one(candidate, names[index])
                 conqs2 = self.replace_two(candidate)
                 conqs3 = self.replace_three(candidate)
                 conqs4 = self.replace_four(candidate)
-                print(oldstmt)
                 if self.option == 'static':
                     if conqs1 or conqs2 or conqs3 or conqs4:
                         print("original API:" + oldstmt)
@@ -151,20 +184,23 @@ class APIReplace(object):
                         newstmt = conqs1
                         print('Recommend API:' + newstmt)
                         self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                        cnt += 1
                     if conqs2:
                         newstmt = conqs2
                         print('Recommend API:' + newstmt)
                         self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                        cnt += 1
                     if conqs3:
                         newstmt = conqs3
                         print('Recommend API:' + newstmt)
                         self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                        cnt += 1
                     if conqs4:
                         newstmt = conqs4
                         print('Recommend API:' + newstmt)
                         self.add_source(oldstmt, newstmt, content, lineno, cnt)
-                    if conqs1 or conqs2 or conqs3 or conqs4:
                         cnt += 1
+                    if conqs1 or conqs2 or conqs3 or conqs4:
                         print("lineno:{}".format(lineno))
                         print('###############################################')
                 index = index + 1
@@ -209,10 +245,36 @@ class APIReplace(object):
         except Exception as e:
                 print(e)
 
+    def replace_agr1(self, oldstmt, agr1, name):
+        if name == 'where':
+            newstmt = oldstmt.replace(name, api_pair1[name])
+            return newstmt
+
+    def replace_agr3(self, oldstmt, agr1, agr2, agr3, name, target_name):
+        if name == 'where':
+            if isinstance(agr1, ast.Compare):
+                obj = astor.to_source(agr1.left).strip()
+                idname = agr1.left.value.id
+                attr = agr1.left.attr
+                arg_two = astor.to_source(agr2).strip()
+                arg_three = astor.to_source(agr3).strip()
+                if target_name == 'map':
+                    cond = astor.to_source(agr1).strip().replace(obj, "x")
+                    newstmt = "{}.{}(lambda x: {} if {} else {})".format(obj, target_name, arg_two, cond, arg_three)
+                    return newstmt
+                elif target_name == 'apply':
+                    cond = astor.to_source(agr1).strip().replace(obj, "#")
+                    attr = 'row["' + attr + '"]'
+                    cond = cond.replace("#", attr)
+                    newstmt = "{}.{}(lambda row : {} if {} else {}, axis=1)".format(idname, target_name, arg_two, cond, arg_three)
+                    return newstmt
+
+
+
     def replace_one(self, node, name):
         oldstmt = astor.to_source(node).strip()
-        if name in api_pair.keys():
-            newstmt = oldstmt.replace(name,api_pair[name])
+        if name in api_pair0.keys():
+            newstmt = oldstmt.replace(name,api_pair0[name])
             return  newstmt
 
     def replace_two(self, node):
@@ -313,30 +375,8 @@ class APIReplace(object):
 
     def replace_four(self, node):
         oldstmt = astor.to_source(node).strip()
-        # np.where->pd.DataFrame.apply
-        if re.match('np.where\(.*\,.*\,.*\)$', oldstmt):
-            for c in ast.iter_child_nodes(node):
-                if isinstance(c, ast.Compare):
-                    o = astor.to_source(c.left).strip()
-                    condition = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(1)
-                    t = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(2)
-                    f = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(3)
-                    newstmt = 'pd.DataFrame(' + o + ').apply(lambda x : ' + condition.replace(o,
-    'x') + ').replace({True:' + t + ',False:' + f + '}).values.flatten()'
-                    return newstmt
-
-        # np.where->pd.Series.map
-        elif re.match('np.where\(.*\,.*\,.*\)$', oldstmt):
-            for c in ast.iter_child_nodes(node):
-                if isinstance(c, ast.Compare):
-                    o = astor.to_source(c.left).strip()
-                    condition = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(1)
-                    t = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(2)
-                    f = re.match('np.where\((.*)\,(.*)\,(.*)\)$', oldstmt).group(3)
-                    newstmt = '(' + o + ').map(lambda x :' + t + ' if ' + condition.replace(o,
-                                                                                            'x') + ' else ' + f + ').values'
-                    return newstmt
-
+        if 1:
+            pass
         # np.hstack -> np.concatenate
         elif re.match('np.hstack.*', oldstmt):
             for node in ast.iter_child_nodes(node):
@@ -470,6 +510,11 @@ class APIReplace(object):
             agrument2 = re.match('np.full\((.*)\,\s0\,(.*)\)$', oldstmt).group(2)
             newstmt = 'np.zeros(' + agrument1 + ',' + agrument2 + ')'
             return newstmt
+
+
+
+
+
 
 
 
