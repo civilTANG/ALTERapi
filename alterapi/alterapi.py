@@ -137,6 +137,7 @@ class APIReplace(object):
         for candidate in v.attrs:
                 oldstmt = astor.to_source(candidate).strip()
                 lineno = candidate.lineno
+                # directly replacement
                 if names[index] in api_pair0.keys():
                     for i in range(0, len(api_pair0[names[index]])):
                         newstmt = oldstmt.replace(names[index], api_pair0[names[index]][i])
@@ -155,7 +156,7 @@ class APIReplace(object):
                         objt = candidate.func.value
                     else:
                         objt = candidate.func
-
+                    # one argument
                     if number_agrs == 1:
                         agr1 = candidate.args
                         if names[index] in api_pair1.keys():
@@ -170,7 +171,7 @@ class APIReplace(object):
                                         cnt += 1
                                     print('Recommend API:' + newstmt)
                                     print("----------------------------------------------------------------------------")
-
+                     # two arguments
                     elif number_agrs == 2:
                         agr1, agr2 = candidate.args
                         if names[index] in api_pair2.keys():
@@ -184,6 +185,7 @@ class APIReplace(object):
                                         cnt += 1
                                     print('Recommend API:' + newstmt)
                                     print("----------------------------------------------------------------------------")
+                     # three arguments
                     elif number_agrs == 3:
                         agr1, agr2, agr3 = candidate.args
                         if names[index] in api_pair3.keys():
@@ -201,7 +203,7 @@ class APIReplace(object):
                     else:
                         print('No ability deal with this situation')
                         print("----------------------------------------------------------------------------")
-
+                # type of Subscript
                 elif isinstance(candidate, ast.Subscript):
                     if isinstance(candidate.slice, ast.Index):
                         keywords = []
@@ -234,6 +236,7 @@ class APIReplace(object):
         CodeInstrumentator(lineno, to_insert).visit(temp_tree)
         instru_source = astor.to_source(temp_tree)
         file_path = os.path.join(os.path.dirname(self.code_path), 'cache')
+        # creat a new file
         if not os.path.exists(file_path):
             os.makedirs(file_path)
         des_path = os.path.join(file_path, 'code_{}.py'.format(cnt))
