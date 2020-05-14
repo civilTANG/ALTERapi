@@ -1,5 +1,4 @@
-import re
-import ast, astor, astunparse
+import ast,astor, astunparse
 from ast import Attribute, Name
 import os, csv
 import subprocess
@@ -22,14 +21,13 @@ api_pair0 = {'astype': ['apply','map'], 'column_stack': ['transpose'],
 api_pair1 ={'where': ['nonzero'],  'hstack': ['append', 'concatenate'],
            'vstack': ['concatenate', 'column_stack'],
             'column_stack': ['vstack'], 'array': ['fromiter', 'concatenate'], 'zeros': ['empty'], 'ones': ['empty'],
-            'map':['replace'] , 'str': ['map'], 'c_': ['hstack'], 'arange':['array']}
+            'map': ['replace', 'where'], 'str': ['map'], 'c_': ['hstack'], 'arange':['array'],'count_nonzero': ['sum'],
+            'sum': ['count_nonzero', 'sum', 'einsum']}
 
-api_pair2 = {'full': ['empty', 'zeros']}
+api_pair2 = {'full': ['empty', 'zeros'], 'dot': ['einsum','tensordot'],'sum': ['sum']}
 
-api_pair3 = {'where': ['apply', 'map','astype']}
+api_pair3 = {'where': ['apply', 'map', 'astype']}
 
-# matrix operation
-api_pair4 = {'sum': 'einsum', }
 
 # template for replacement
 template = """    
@@ -145,26 +143,15 @@ class APIReplace(object):
                         print('Recommend API:' + newstmt)
                         print("----------------------------------------------------------------------------")
 
-
-                if self.other(candidate):
-                    newstmt = self.other(candidate)
-                    print("original API:" + oldstmt)
-                    print("lineno:{}".format(lineno))
-                    if self.option == 'dynamic':
-                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
-                        cnt += 1
-                    print('Recommend API:' + newstmt)
-                    print("----------------------------------------------------------------------------")
-
-
                 if isinstance(candidate, ast.Call):
                     number_agrs = len(candidate.args)
                     keywords = candidate.keywords
+                    objt = candidate.func.value
                     if number_agrs == 1:
                         agr1 = candidate.args
                         if names[index] in api_pair1.keys():
                             for i in range(0, len(api_pair1[names[index]])):
-                                newstmt = self.replace_1agr(oldstmt, agr1, keywords, names[index], api_pair1[names[index]][i])
+                                newstmt = self.replace_1agr(oldstmt, agr1, keywords, objt, names[index], api_pair1[names[index]][i])
                                 if newstmt:
                                     print("original API:" + oldstmt)
                                     print("lineno:{}".format(lineno))
@@ -173,7 +160,6 @@ class APIReplace(object):
                                         cnt += 1
                                     print('Recommend API:' + newstmt)
                                     print("----------------------------------------------------------------------------")
-
 
                     elif number_agrs == 2:
                         agr1, agr2 = candidate.args
@@ -188,8 +174,6 @@ class APIReplace(object):
                                         cnt += 1
                                     print('Recommend API:' + newstmt)
                                     print("----------------------------------------------------------------------------")
-
-
                     elif number_agrs == 3:
                         agr1, agr2, agr3 = candidate.args
                         if names[index] in api_pair3.keys():
@@ -266,12 +250,12 @@ class APIReplace(object):
         except Exception as e:
                 print(e)
 
-
-    def replace_1agr(self, oldstmt, agr1, keywords, name, target_name):
-        if isinstance(agr1,ast.Index):
+    def replace_1agr(self,oldstmt , agr1, keywords, objt, name, target_name):
+        if isinstance(agr1, ast.Index):
             inx = astunparse.unparse(agr1)
         else:
             agr_one = astor.to_source(agr1[0]).strip()
+
         if name == 'hstack' and (isinstance(agr1[0], ast.Tuple) or isinstance(agr1[0], ast.List)):
             if len(agr1[0].elts) == 2 and target_name == 'append' and isinstance(agr1[0], ast.Tuple):
                 newstmt = 'np.' + target_name + agr_one
@@ -279,6 +263,12 @@ class APIReplace(object):
             if target_name == 'concatenate':
                 newstmt = 'np.{}({}, axis=1)'.format(target_name, agr_one)
                 return newstmt
+
+        elif name == 'where' or (name == 'map' and isinstance(agr1[0], ast.Dict))\
+                or (name == 'count_nonzero' and isinstance(agr1[0], ast.Compare))\
+                or (name == 'sum' and isinstance(agr1[0], ast.Compare) and target_name == 'count_nonzero'):
+            newstmt = oldstmt.replace(name, target_name)
+            return newstmt
 
         elif name == 'vstack' and (isinstance(agr1[0], ast.Tuple) or isinstance(agr1[0], ast.List)):
             if target_name == 'concatenate':
@@ -309,9 +299,22 @@ class APIReplace(object):
             newstmt = oldstmt.replace(name, target_name) + "; r2.fill(1)"
             return newstmt
 
-        elif name == 'where' or (name == 'map' and isinstance(agr1[0], ast.Dict)):
-            newstmt = oldstmt.replace(name, target_name)
-            return newstmt
+        elif name == 'sum':
+            if target_name == 'sum':
+                newstmt = '({}).{}()'.format(agr_one, target_name)
+                return newstmt
+            if target_name == 'einsum':
+                if len(keywords) == 0:
+                    newstmt = "np.{}('i->',{})".format(target_name, agr_one)
+                    return newstmt
+                else:
+                    keyword = astunparse.unparse(keywords[0])
+                    if ('axis=1' in keyword) or ('axis=-1' in keyword):
+                        newstmt = "np.{}('ij->i',{} )".format(target_name, agr_one)
+                        return newstmt
+                    elif ('axis=-2' in keyword) or ('axis=0' in keyword):
+                        newstmt = "np.{}('ij->j',{} )".format(target_name,agr_one)
+                        return newstmt
 
         elif name == 'str':
             newstmt = oldstmt.replace('str', 'map(lambda x: x') + ')'
@@ -321,9 +324,20 @@ class APIReplace(object):
             newstmt = oldstmt.replace("c_", "hstack(") + ")"
             return newstmt
 
-        elif '.arrange' in oldstmt:
+        elif name == 'arrange':
             newstmt = oldstmt.replace('arrange(', 'np.array(range(')
             return newstmt
+
+            # pd.Series.map	-> np.where
+        elif name == 'map' and target_name == 'where':
+            if isinstance(agr1[0], ast.Lambda):
+                if isinstance(agr1[0].body, ast.IfExp):
+                    cond = astunparse.unparse(agr1[0].body.test)
+                    cond = cond.replace(astunparse.unparse(agr1[0].args.args).strip(),
+                                        astunparse.unparse(objt).strip()).strip()
+                    newstmt = 'np.{}({},{},{})'.format(target_name, cond, astunparse.unparse(agr1[0].body.body).strip(),
+                                                      astunparse.unparse(agr1[0].body.orelse).strip())
+                    return newstmt
 
     def replace_2agr(self, oldstmt, agr1, agr2, keywords, name, target_name):
         agr_one = astor.to_source(agr1).strip()
@@ -339,6 +353,18 @@ class APIReplace(object):
                 if not (target_name == 'zeros' and int(arg_two) != 0):
                         newstmt = 'np.{}({});r2[:] ={}'.format(target_name, agr_one, arg_two).replace('\n','')
                         return newstmt
+
+        elif name == 'dot':
+            if target_name == 'einsum':
+                newstmt = "np.{}('ij,jm->im',{},{} )".format(target_name,agr_one,arg_two)
+                return newstmt
+            elif target_name == 'tensordot':
+                newstmt = 'np.{}({},{},axes=1)'.format(target_name,agr_one,arg_two)
+                return newstmt
+
+        elif name == 'sum' and target_name == 'sum':
+            newstmt = '({}).{}({})'.format(agr_one, target_name, arg_two)
+            return newstmt
 
     def replace_3agr(self, oldstmt, agr1, agr2, agr3, name, target_name):
         if name == 'where':
@@ -363,87 +389,8 @@ class APIReplace(object):
                     newstmt = '({}).{}(( {} ).dtype)'.format(agr_one,target_name,agr_one)
                     return newstmt
 
-    def other(self, node):
-        oldstmt = astor.to_source(node).strip()
-         # np.dot -> np.einsum
-        if re.match('np.dot.*', oldstmt):
-            agr1 = re.match('np.dot\((.*)\)$', oldstmt).group(1)
-            newstmt = "np.einsum('ij,jm->im'," + agr1 + ')'
-            return newstmt
 
-        # np.sum ->np.einsum
-        elif re.match('np\.sum\(.*\,.*\)$', oldstmt):
-            agrument1 = re.match('np\.sum\((.*)\,(.*)\)$', oldstmt).group(1)
-            agrument2 = re.match('np\.sum\((.*)\,(.*)\)$', oldstmt).group(2)
-            if ('axis=1' in agrument2) or ('axis=-1' in agrument2):
-                newstmt = "np.einsum('ij->i'," + agrument1 + ")"
-                return newstmt
-            elif ('axis=-2' in agrument2) or ('axis=0' in agrument2):
-                newstmt = "np.einsum('ij->j'," + agrument1 + ")"
-                return newstmt
 
-        # np.sum ->np.einsum
-        elif re.match('np\.sum\((.*)\)$', oldstmt):
-            agrument1 = re.match('np\.sum\((.*)\)$', oldstmt).group(1)
-            newstmt = "np.einsum('i->'," + agrument1 + ")"
-            return newstmt
 
-        # np.ndarray.sum - >p.einsum
-        elif re.match('(.*)\.sum\((.*)\)$', oldstmt):
-            agrument1 = re.match('(.*)\.sum\((.*)\)$', oldstmt).group(1)
-            agrument2 = re.match('(.*)\.sum\((.*)\)$', oldstmt).group(2)
-            if ('axis=1' in agrument2) or ('axis=-1' in agrument2):
-                newstmt = "np.einsum('ij->i'," + agrument1 + ")"
-                return newstmt
-            elif ('axis=-2' in agrument2) or ('axis=0' in agrument2):
-                newstmt = "np.einsum('ij->j'," + agrument1 + ")"
-                return newstmt
-            else:
-                newstmt = "np.einsum('i->'," + agrument1 + ")"
-                return newstmt
 
-        # pd.Series.map	-> np.where
-        elif re.match('.*map.*lambda.*if.*else.*', oldstmt):
-            o = re.match('(.*)\.map\(lambda(.*):(.*)if(.*)else\s(.*)\)$', oldstmt).group(1)
-            x = re.match('(.*)\.map\(lambda\s(.*):(.*)if(.*)else\s(.*)\)$', oldstmt).group(2)
-            t = re.match('(.*)\.map\(lambda(.*):(.*)if(.*)else\s(.*)\)$', oldstmt).group(3)
-            condition = re.match('(.*)\.map\(lambda(.*):(.*)if(.*)else\s(.*)\)$', oldstmt).group(4)
-            f = re.match('(.*)\.map\(lambda(.*):(.*)if(.*)else\s(.*)\)$', oldstmt).group(5)
-            newstmt = 'np.where(' + condition.replace(x, o) + ',' + t.replace(x, o) + ',' + f.replace(x, o) + ')'
-            return newstmt
 
-         # np.linalg.norm ->np.ndarray.sum, np.sqrt
-        elif re.match('np\.linalg\.norm\(.*\)$', oldstmt):
-            newstmt = oldstmt.replace('np.linalg.norm', 'np.sqrt(np.square') + '.sum())'
-            return newstmt
-
-        # np.sum ->np.count_nonzero
-        elif re.match('np\.sum\(.*==.*\)$', oldstmt):
-            newstmt = oldstmt.replace('sum', 'count_nonzero')
-            return newstmt
-
-        # np.count_nonzero -> np.ndarray.sum
-        elif '.count_nonzero' in oldstmt:
-            agr = re.match('np\.count_nonzero\((.*)\)$', oldstmt).group(1)
-            newstmt = 'np.sum(' + agr + '!=0)'
-            return newstmt
-
-        # np.sum ->np.ndarray.sum
-        elif '.sum' in oldstmt:
-            if re.match('np\.sum\(.*\,.*\)$', oldstmt):
-                agrument1 = re.match('np\.sum\((.*)\,(.*)\)$', oldstmt).group(1)
-                agrument2 = re.match('np\.sum\((.*)\,(.*)\)$', oldstmt).group(2)
-
-            else:
-                agrument1 = re.match('np\.sum\((.*)\)$', oldstmt).group(1)
-                agrument2 = ""
-            newstmt = '(' + agrument1 + ').sum(' + agrument2 + ')'
-            return newstmt
-
-        # np.ndarray.dot -> np.tensordot
-        elif '.dot' in oldstmt:
-            if 'np.dot.*' not in oldstmt:
-                agr1 = re.match('(.*)\.dot\((.*)\)$', oldstmt).group(1)
-                agr2 = re.match('(.*)\.dot\((.*)\)$', oldstmt).group(2)
-                newstmt = 'np.tensordot(' + agr1 + ',' + agr2 + ',axes=1)'
-                return newstmt
