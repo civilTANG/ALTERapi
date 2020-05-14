@@ -2,21 +2,27 @@ import ast,astor, astunparse
 from ast import Attribute, Name
 import os, csv
 import subprocess
-api_name = ['c_', 'iloc',  'loc', 'apply','sum', 'count_nonzero','hstack','array', 'where', 'transpose', 'query',
-            'vstack','zeros','query','apply','map','crosstab','where','atleast_2d','tile','loc',
-            'to_datetime','array','hstack','concatenate','iloc','astype','array','str',
-            'fillna','norm','where','array','column_stack','count_nonzero','nonzero','transpose',
-            'replace','cumprod','tensordot','iterrows','query','arange','iat','argmax',
-            'array','column_stack','dot','full','hstack','ones','vstack','zeros','ix','dot','at','append']
+api_name = ['c_', 'iloc',  'loc', 'apply',
+            'sum', 'where', 'vstack', 'zeros',
+            'map', 'crosstab', 'fromiter', 'hstack',
+            'concatenate', 'astype',
+            'array', 'str', 'fillna', 'count_nonzero',
+            'nonzero', 'transpose',
+            'replace', 'tensordot',
+            'query', 'arange',
+            'iat', 'column_stack',
+            'full','ones', 'vstack',
+            'ix', 'dot', 'at', 'append']
 
 # direct replacement
-api_pair0 = {'astype': ['apply','map'], 'column_stack': ['transpose'],
-            'loc': ['ix'], 'transpose': ['column_stack'],
-            'ix': ['loc'], 'nonzero': ['where'], 'apply': ['map'],
+api_pair0 = {'astype': ['apply', 'map'], 'column_stack': ['transpose'],
+             'loc': ['ix'], 'transpose': ['column_stack'],
+             'ix': ['loc'], 'nonzero': ['where'], 'apply': ['map'],
              'query': ['loc'], 'replace': ['map'],
-            'at': ['loc'], 'iloc': ['loc'], 'iat': ['iloc'],
-            'map': ['apply'], 'fillna': ['combine_first'],
-             'hstack': ['c_'], 'array': ['hstack'], 'fromiter': ['array'] }
+             'at': ['loc', 'iat'], 'iloc': ['loc'], 'iat': ['iloc', 'loc'],
+             'map': ['apply'], 'fillna': ['combine_first'],
+             'hstack': ['c_'], 'array': ['hstack'],
+             'fromiter': ['array']}
 
 api_pair1 ={'where': ['nonzero'],  'hstack': ['append', 'concatenate'],
            'vstack': ['concatenate', 'column_stack'],
@@ -131,14 +137,13 @@ class APIReplace(object):
         for candidate in v.attrs:
                 oldstmt = astor.to_source(candidate).strip()
                 lineno = candidate.lineno
-
                 if names[index] in api_pair0.keys():
                     for i in range(0, len(api_pair0[names[index]])):
                         newstmt = oldstmt.replace(names[index], api_pair0[names[index]][i])
                         print("original API:" + oldstmt)
                         print("lineno:{}".format(lineno))
                         if self.option == 'dynamic':
-                            self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                            self.__add_source(oldstmt, newstmt, content, lineno, cnt)
                             cnt += 1
                         print('Recommend API:' + newstmt)
                         print("----------------------------------------------------------------------------")
@@ -146,17 +151,22 @@ class APIReplace(object):
                 if isinstance(candidate, ast.Call):
                     number_agrs = len(candidate.args)
                     keywords = candidate.keywords
-                    objt = candidate.func.value
+                    if isinstance(candidate.func, ast.Attribute):
+                        objt = candidate.func.value
+                    else:
+                        objt = candidate.func
+
                     if number_agrs == 1:
                         agr1 = candidate.args
                         if names[index] in api_pair1.keys():
                             for i in range(0, len(api_pair1[names[index]])):
-                                newstmt = self.replace_1agr(oldstmt, agr1, keywords, objt, names[index], api_pair1[names[index]][i])
+                                newstmt = self.__replace_1agr(oldstmt, agr1, keywords, objt, names[index],
+                                                              api_pair1[names[index]][i])
                                 if newstmt:
                                     print("original API:" + oldstmt)
                                     print("lineno:{}".format(lineno))
                                     if self.option == 'dynamic':
-                                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                                        self.__add_source(oldstmt, newstmt, content, lineno, cnt)
                                         cnt += 1
                                     print('Recommend API:' + newstmt)
                                     print("----------------------------------------------------------------------------")
@@ -165,12 +175,12 @@ class APIReplace(object):
                         agr1, agr2 = candidate.args
                         if names[index] in api_pair2.keys():
                             for i in range(0, len(api_pair2[names[index]])):
-                                newstmt = self.replace_2agr(oldstmt, agr1, agr2, keywords, names[index], api_pair2[names[index]][i])
+                                newstmt = self.__replace_2agr(oldstmt, agr1, agr2, keywords, names[index], api_pair2[names[index]][i])
                                 if newstmt:
                                     print("original API:" + oldstmt)
                                     print("lineno:{}".format(lineno))
                                     if self.option == 'dynamic':
-                                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                                        self.__add_source(oldstmt, newstmt, content, lineno, cnt)
                                         cnt += 1
                                     print('Recommend API:' + newstmt)
                                     print("----------------------------------------------------------------------------")
@@ -178,12 +188,12 @@ class APIReplace(object):
                         agr1, agr2, agr3 = candidate.args
                         if names[index] in api_pair3.keys():
                             for i in range(0, len(api_pair3[names[index]])):
-                                newstmt = self.replace_3agr(oldstmt, agr1, agr2, agr3, names[index], api_pair3[names[index]][i])
+                                newstmt = self.__replace_3agr(oldstmt, agr1, agr2, agr3, names[index], api_pair3[names[index]][i])
                                 if newstmt:
                                     print("original API:" + oldstmt)
                                     print("lineno:{}".format(lineno))
                                     if self.option == 'dynamic':
-                                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                                        self.__add_source(oldstmt, newstmt, content, lineno, cnt)
                                         cnt += 1
                                     print('Recommend API:' + newstmt)
                                     print("----------------------------------------------------------------------------")
@@ -197,14 +207,15 @@ class APIReplace(object):
                         keywords = []
                         if names[index] in api_pair1.keys():
                             for i in range(0, len(api_pair1[names[index]])):
-                                newstmt = self.replace_1agr(oldstmt, candidate.slice, keywords, names[index], api_pair1[names[index]][i])
+                                newstmt = self.__replace_1agr(oldstmt, candidate.slice, keywords,
+                                                              objt, names[index], api_pair1[names[index]][i])
                                 if newstmt:
                                     print("original API:" + oldstmt)
                                     print("lineno:{}".format(lineno))
                                     print('Recommend API:' + newstmt)
                                     print("----------------------------------------------------------------------------")
                                     if self.option == 'dynamic':
-                                        self.add_source(oldstmt, newstmt, content, lineno, cnt)
+                                        self.__add_source(oldstmt, newstmt, content, lineno, cnt)
                                         cnt += 1
 
                     else:
@@ -213,7 +224,7 @@ class APIReplace(object):
                 index = index + 1
 
 
-    def add_source(self, oldstmt, newstmt, content, lineno, cnt):
+    def __add_source(self, oldstmt, newstmt, content, lineno, cnt):
         to_add = template.format(oldstmt, newstmt, oldstmt, newstmt, lineno, '"{}"'.format(oldstmt),
                                  '"{}"'.format(newstmt))
         # fill in the template
@@ -222,13 +233,16 @@ class APIReplace(object):
         temp_tree = ast.parse(content)
         CodeInstrumentator(lineno, to_insert).visit(temp_tree)
         instru_source = astor.to_source(temp_tree)
-        des_path = os.path.join(os.path.dirname(self.code_path), 'code_{}.py'.format(cnt))
+        file_path = os.path.join(os.path.dirname(self.code_path), 'cache')
+        if not os.path.exists(file_path):
+            os.makedirs(file_path)
+        des_path = os.path.join(file_path, 'code_{}.py'.format(cnt))
         with open(des_path, 'w') as wf:
             wf.write(instru_source)
         wf.close()
-        self.execute_code(des_path)
+        self.__execute_code(des_path)
 
-    def execute_code(self, des_path):
+    def __execute_code(self, des_path):
         try:
             cmd = "python " + des_path
             print("executing:" + des_path)
@@ -250,9 +264,9 @@ class APIReplace(object):
         except Exception as e:
                 print(e)
 
-    def replace_1agr(self,oldstmt , agr1, keywords, objt, name, target_name):
+    def __replace_1agr(self,oldstmt , agr1, keywords, objt, name, target_name):
         if isinstance(agr1, ast.Index):
-            inx = astunparse.unparse(agr1)
+            agr_one = astunparse.unparse(agr1)
         else:
             agr_one = astor.to_source(agr1[0]).strip()
 
@@ -305,7 +319,7 @@ class APIReplace(object):
                 return newstmt
             if target_name == 'einsum':
                 if len(keywords) == 0:
-                    newstmt = "np.{}('i->',{})".format(target_name, agr_one)
+                    newstmt = "np.{}('ij->',{})".format(target_name, agr_one)
                     return newstmt
                 else:
                     keyword = astunparse.unparse(keywords[0])
@@ -335,11 +349,11 @@ class APIReplace(object):
                     cond = astunparse.unparse(agr1[0].body.test)
                     cond = cond.replace(astunparse.unparse(agr1[0].args.args).strip(),
                                         astunparse.unparse(objt).strip()).strip()
-                    newstmt = 'np.{}({},{},{})'.format(target_name, cond, astunparse.unparse(agr1[0].body.body).strip(),
-                                                      astunparse.unparse(agr1[0].body.orelse).strip())
+                    newstmt = 'np.{}({},{},{})'.format(target_name, cond, astor.to_source(agr1[0].body.body).strip(),
+                                                     astor.to_source(agr1[0].body.orelse).strip())
                     return newstmt
 
-    def replace_2agr(self, oldstmt, agr1, agr2, keywords, name, target_name):
+    def __replace_2agr(self, oldstmt, agr1, agr2, keywords, name, target_name):
         agr_one = astor.to_source(agr1).strip()
         arg_two = astor.to_source(agr2).strip()
         if name == 'full':
@@ -349,9 +363,15 @@ class APIReplace(object):
                     if not (target_name == 'zeros' and int(arg_two) != 0):
                         newstmt = 'np.{}({},{});r2[:] ={}'.format(target_name,agr_one,keyword,arg_two).replace('\n','')
                         return newstmt
+                    else:
+                        newstmt = 'np.{}({},{})'.format(target_name, agr_one, keyword).replace('\n', '')
+                        return newstmt
             else:
                 if not (target_name == 'zeros' and int(arg_two) != 0):
                         newstmt = 'np.{}({});r2[:] ={}'.format(target_name, agr_one, arg_two).replace('\n','')
+                        return newstmt
+                else:
+                        newstmt = 'np.{}({})'.format(target_name, agr_one).replace('\n', '')
                         return newstmt
 
         elif name == 'dot':
@@ -366,7 +386,7 @@ class APIReplace(object):
             newstmt = '({}).{}({})'.format(agr_one, target_name, arg_two)
             return newstmt
 
-    def replace_3agr(self, oldstmt, agr1, agr2, agr3, name, target_name):
+    def __replace_3agr(self, oldstmt, agr1, agr2, agr3, name, target_name):
         if name == 'where':
             if isinstance(agr1, ast.Compare):
                 obj = astor.to_source(agr1.left).strip()
@@ -388,6 +408,11 @@ class APIReplace(object):
                 elif target_name == 'astype':
                     newstmt = '({}).{}(( {} ).dtype)'.format(agr_one,target_name,agr_one)
                     return newstmt
+
+
+
+
+
 
 
 
