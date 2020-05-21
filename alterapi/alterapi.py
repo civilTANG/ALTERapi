@@ -1,63 +1,44 @@
-import ast,astor, astunparse
-from ast import Attribute, Name
-import os, csv
-import subprocess
-api_name = ['c_', 'iloc',  'loc', 'apply',
-            'sum', 'where', 'vstack', 'zeros',
-            'map', 'crosstab', 'fromiter', 'hstack',
-            'concatenate', 'astype',
-            'array', 'str', 'fillna', 'count_nonzero',
-            'nonzero', 'transpose',
-            'replace', 'tensordot',
-            'query', 'arange',
-            'iat', 'column_stack',
-            'full','ones', 'vstack',
-            'ix', 'dot', 'at', 'append']
+import ast, astor, re
+import os, subprocess
+import builtins
+builtin_types = [getattr(builtins, d) for d in dir(builtins) if isinstance(getattr(builtins, d), type)]
 
-# direct replacement
-api_pair0 = {'astype': ['apply', 'map'], 'column_stack': ['transpose'],
-             'loc': ['ix'], 'transpose': ['column_stack'],
-             'ix': ['loc'], 'nonzero': ['where'], 'apply': ['map'],
-             'query': ['loc'], 'replace': ['map'],
-             'at': ['loc', 'iat'], 'iloc': ['loc'], 'iat': ['iloc', 'loc'],
-             'map': ['apply'], 'fillna': ['combine_first'],
-             'hstack': ['c_'], 'array': ['hstack'],
-             'fromiter': ['array']}
-
-api_pair1 ={'where': ['nonzero'],  'hstack': ['append', 'concatenate'],
-           'vstack': ['concatenate', 'column_stack'],
-            'column_stack': ['vstack'], 'array': ['fromiter', 'concatenate'], 'zeros': ['empty'], 'ones': ['empty'],
-            'map': ['replace', 'where'], 'str': ['map'], 'c_': ['hstack'], 'arange':['array'],'count_nonzero': ['sum'],
-            'sum': ['count_nonzero', 'sum', 'einsum']}
-
-api_pair2 = {'full': ['empty', 'zeros'], 'dot': ['einsum','tensordot'],'sum': ['sum']}
-
-api_pair3 = {'where': ['apply', 'map', 'astype']}
+# code template to be instrumented
+template = """
+import sys, timeit, string
+from itertools import chain
+# original code
+r1 = {}  
+# necessary initializations
+{}
+# replaced code
+r2 = {}
+# assert output equivalence
+if isinstance(r1, pd.Series) and isinstance(r2, pd.Series) or isinstance(r1, pd.DataFrame) and isinstance(r2, pd.DataFrame):
+    assert r1.equals(r2)
+elif isinstance(r1, pd.DataFrame) and isinstance(r2, np.ndarray) or isinstance(r2, pd.DataFrame) and isinstance(r1, np.ndarray):
+    df_data = r1 if isinstance(r1, pd.DataFrame) else r2
+    nd_data = pd.DataFrame(r1) if isinstance(r1, np.ndarray) else pd.DataFrame(r2)
+    assert df_data.equals(nd_data)
+else:
+    assert np.array_equal(r1, r2) == True
 
 
-# template for replacement
-template = """    
-import os, timeit, csv\n
-r1 = {} # original code \n
-r2 = {}  # api replace \n 
+def func1():
+    {}
 
-     
-if (isinstance(r1, pd.Series) and isinstance(r2, pd.Series)) or (isinstance(r1, pd.DataFrame) and isinstance(r2, pd.DataFrame)):\n
-    assert r1.equals(r2)\n   
-else:\n
-    assert np.allclose(r1,r2)\n
-def func1():\n
-    {}\n
-def func2():\n
-    {}\n
-number_of_runs = 100 \n
-t1 = timeit.timeit(func1, number=number_of_runs) / number_of_runs\n
-t2 = timeit.timeit(func2, number=number_of_runs) / number_of_runs\n
-with open("optimization.csv", "a+") as f:\n
-     writer = csv.writer(f)\n
-     writer.writerow([{},{},{},t1, t2])\n
-os._exit(0)\n
-     """
+
+def func2():
+    {}
+
+# get execution time
+number_of_runs = 100
+t1 = timeit.timeit(func1, number=number_of_runs) / number_of_runs
+t2 = timeit.timeit(func2, number=number_of_runs) / number_of_runs
+with open('optimization.csv', 'w') as f:
+    writer = f.write(str(t1) + ',' + str(t2))
+sys.exit(0)
+"""
 
 
 class CallParser(ast.NodeVisitor):
@@ -77,25 +58,25 @@ class CallParser(ast.NodeVisitor):
 
     def visit_Call(self, node):
         self.generic_visit(node)
-        if isinstance(node.func, Attribute) and node.func.attr in api_name:
+        if isinstance(node.func, ast.Attribute) and node.func.attr in target_apis:
                 name = node.func.attr
                 self.names.append(name)
                 self.attrs.append(node)
-        elif isinstance(node.func, Name) and node.func.id in api_name:
+        elif isinstance(node.func, ast.Name) and node.func.id in target_apis:
                 name = node.func.id
                 self.names.append(name)
                 self.attrs.append(node)
 
     def visit_Subscript(self, node):
         self.generic_visit(node)
-        if isinstance(node.value, Attribute) and node.value.attr in api_name:
+        if isinstance(node.value, ast.Attribute) and node.value.attr in target_apis:
             name = node.value.attr
             self.names.append(name)
             self.attrs.append(node)
 
 
-# insert new code
-class CodeInstrumentator(ast.NodeTransformer):
+
+class CodeInstrument(ast.NodeTransformer):
     def __init__(self, lineno, newnode):
         self.line = lineno
         self.newnode = newnode
@@ -115,6 +96,20 @@ class CodeInstrumentator(ast.NodeTransformer):
                 self.visit(value)
 
 
+target_apis = ['iloc', 'loc', 'where', 'apply', 'map', 'replace',
+               'sum', 'nonzero', 'einsum', 'dot', 'full', 'empty',
+               'vstack', 'c_', 'hstack', 'column_stack', 'array', 'vectorize',
+               'atleast_2d', 'combine_first', 'crosstab', 'to_datetime',
+               'unstack', 'groupby', 'value_counts', 'cumprod']
+
+direct_replaces = {'replace': 'map',
+                   'vstack': 'concatenate',
+                   'combine_first': 'fillna',
+                   'column_stack': 'transpose'}
+
+compare_direct_replaces = {"sum": "count_nonzero",
+                           "nonzero": "where"}
+
 class APIReplace(object):
     def __init__(self, code_path, option='static'):
         self.code_path = code_path
@@ -122,296 +117,215 @@ class APIReplace(object):
 
     def recommend(self):
         cnt = 0
-        index = 0
-        # open file
+
+        with open(self.code_path, 'r', encoding='UTF-8') as file:
+            lines = file.readlines()
         with open(self.code_path, 'r', encoding='UTF-8') as file:
             content = file.read()
-        file.close()
 
-        # parse
-        tree = ast.parse(content)  # parse the code into ast_tree
+        tree = ast.parse(content)
         v = CallParser()   # find the potential api
         v.visit(tree)
         names = v.names
 
-        for candidate in v.attrs:
-                oldstmt = astor.to_source(candidate).strip()
-                lineno = candidate.lineno
-                # directly replacement
-                if names[index] in api_pair0.keys():
-                    for i in range(0, len(api_pair0[names[index]])):
-                        newstmt = oldstmt.replace(names[index], api_pair0[names[index]][i])
-                        print("original API:" + oldstmt)
-                        print("lineno:{}".format(lineno))
-                        if self.option == 'dynamic':
-                            self.__add_source(oldstmt, newstmt, content, lineno, cnt)
-                            cnt += 1
-                        print('Recommend API:' + newstmt)
-                        print("----------------------------------------------------------------------------")
+        for index, candidate in enumerate(v.attrs):
+            oldstmt = astor.to_source(candidate).strip()
+            target_api = names[index]
+            lineno = candidate.lineno
+            newstmt, env = None, ""
 
-                if isinstance(candidate, ast.Call):
-                    number_agrs = len(candidate.args)
-                    keywords = candidate.keywords
-                    if isinstance(candidate.func, ast.Attribute):
-                        objt = candidate.func.value
+            if isinstance(candidate, ast.Subscript) and target_api in ['loc', 'iloc', 'c_']:
+                if isinstance(candidate.slice.value, ast.Tuple):
+                    if target_api == "c_":
+                        replace_api = "hstack"
                     else:
-                        objt = candidate.func
-                    # one argument
-                    if number_agrs == 1:
-                        agr1 = candidate.args
-                        if names[index] in api_pair1.keys():
-                            for i in range(0, len(api_pair1[names[index]])):
-                                newstmt = self.__replace_1agr(oldstmt, agr1, keywords, objt, names[index],
-                                                              api_pair1[names[index]][i])
-                                if newstmt:
-                                    print("original API:" + oldstmt)
-                                    print("lineno:{}".format(lineno))
-                                    if self.option == 'dynamic':
-                                        self.__add_source(oldstmt, newstmt, content, lineno, cnt)
-                                        cnt += 1
-                                    print('Recommend API:' + newstmt)
-                                    print("----------------------------------------------------------------------------")
-                     # two arguments
-                    elif number_agrs == 2:
-                        agr1, agr2 = candidate.args
-                        if names[index] in api_pair2.keys():
-                            for i in range(0, len(api_pair2[names[index]])):
-                                newstmt = self.__replace_2agr(oldstmt, agr1, agr2, keywords, names[index], api_pair2[names[index]][i])
-                                if newstmt:
-                                    print("original API:" + oldstmt)
-                                    print("lineno:{}".format(lineno))
-                                    if self.option == 'dynamic':
-                                        self.__add_source(oldstmt, newstmt, content, lineno, cnt)
-                                        cnt += 1
-                                    print('Recommend API:' + newstmt)
-                                    print("----------------------------------------------------------------------------")
-                     # three arguments
-                    elif number_agrs == 3:
-                        agr1, agr2, agr3 = candidate.args
-                        if names[index] in api_pair3.keys():
-                            for i in range(0, len(api_pair3[names[index]])):
-                                newstmt = self.__replace_3agr(oldstmt, agr1, agr2, agr3, names[index], api_pair3[names[index]][i])
-                                if newstmt:
-                                    print("original API:" + oldstmt)
-                                    print("lineno:{}".format(lineno))
-                                    if self.option == 'dynamic':
-                                        self.__add_source(oldstmt, newstmt, content, lineno, cnt)
-                                        cnt += 1
-                                    print('Recommend API:' + newstmt)
-                                    print("----------------------------------------------------------------------------")
+                        replace_api = "at" if isinstance(candidate.slice.value.elts[1], ast.Str) else "iat"
+                else:
+                    replace_api = "iloc"
 
+                newstmt = oldstmt.replace(target_api, replace_api)
+                if target_api == "c_":
+                    newstmt = newstmt.replace("[","((").replace("]","))")
+                self.__replace(oldstmt, env, newstmt, content, lineno, cnt)
+                continue
+
+            receiver = astor.to_source(candidate.func.value).strip()
+            args_cnt = len(candidate.args) + len(candidate.keywords)
+
+            if len(candidate.args) == 0:
+                if target_api == "sum":
+                    if len(candidate.keywords) == 0 and isinstance(candidate.func.value, ast.Compare):
+                        newstmt = "np.count_nonzero{}".format(receiver)
+                    elif "*" in receiver and candidate.keywords[0].arg == "axis":
+                        var1, var2 = receiver[1:-1].split("*")
+                        newstmt = "np.einsum('...i,...i ->...', {}, {})".format(var1, var2)
+                if target_api in ["unstack", "filter"]:
+                    vs = CallParser()
+                    vs.visit(ast.parse(oldstmt))
+                    if vs.names == ['groupby', 'value_counts', 'unstack']:
+                        col1 = candidate.func.value.func.value.value.args[0].s
+                        col2 = candidate.func.value.func.value.slice.value.s
+                        newstmt = "df.groupby(['{}','{}']).size().unstack(fill_value=0)".format(col1, col2)
+                    if vs.names == ['groupby', 'filter']:
+                        newstmt = ""
+                if target_api == "cumprod":
+                    axis = 0
+                    if len(candidate.keywords) == 1 and candidate.keywords[0].arg == "axis":
+                        axis = candidate.keywords[0].value.n
+                    newstmt = "np.cumprod(axis={})".format(axis)
+                if newstmt:
+                    self.__replace(oldstmt, env, newstmt, content, lineno, cnt)
+                continue
+
+            arg = candidate.args[0]
+            argstr = arg.s if isinstance(arg, ast.Str) else astor.to_source(arg).strip()
+
+            if target_api in direct_replaces and args_cnt == 1:
+                newstmt = oldstmt.replace(target_api, direct_replaces[target_api])
+
+            elif target_api == "map" and isinstance(arg, ast.Name) and type(arg.id) in builtin_types:
+                newstmt = oldstmt.replace(target_api, "astype")
+
+            elif isinstance(arg, ast.Compare):
+                if target_api in compare_direct_replaces:
+                    newstmt = oldstmt.replace(target_api, compare_direct_replaces[target_api])
+                elif target_api == "where":
+                    if receiver == "np" and args_cnt == 3 and candidate.args[1].n in [0, 1] and candidate.args[2].n in [0, 1]:
+                        newstmt = "({}).astype(int)".format(argstr)
+                    elif lines[lineno-1].strip().endswith("[0][0]"):
+                        newstmt = "np.argmax({})".format(argstr)
+                        oldstmt = lines[lineno-1].strip()
                     else:
-                        print('No ability deal with this situation')
-                        print("----------------------------------------------------------------------------")
-                # type of Subscript
-                elif isinstance(candidate, ast.Subscript):
-                    if isinstance(candidate.slice, ast.Index):
-                        keywords = []
-                        if names[index] in api_pair1.keys():
-                            for i in range(0, len(api_pair1[names[index]])):
-                                newstmt = self.__replace_1agr(oldstmt, candidate.slice, keywords,
-                                                              objt, names[index], api_pair1[names[index]][i])
-                                if newstmt:
-                                    print("original API:" + oldstmt)
-                                    print("lineno:{}".format(lineno))
-                                    print('Recommend API:' + newstmt)
-                                    print("----------------------------------------------------------------------------")
-                                    if self.option == 'dynamic':
-                                        self.__add_source(oldstmt, newstmt, content, lineno, cnt)
-                                        cnt += 1
+                        cond = astor.to_source(candidate.args[0]).strip().replace(receiver, receiver + ".values")
+                        other = astor.to_source(candidate.args[1]).strip() if len(candidate.args) == 2 else "np.nan"
+                        newstmt = "np.where({}, {}.values, {})".format(cond, receiver, other)
 
+            elif isinstance(arg, ast.Lambda):
+                if not hasattr(arg.body, "test") and target_api == "apply":
+                    if isinstance(arg.body, ast.Call) and type(arg.body.func.id) in builtin_types:
+                        newstmt = "{}.astype({})".format(receiver, arg.body.func.id)
                     else:
-                        print('No ability deal with this situation')
-                        print("----------------------------------------------------------------------------")
-                index = index + 1
+                        newstmt = oldstmt.replace(target_api, "map")
+                else:
+                    test_clause = astor.to_source(arg.body.test).strip()
+                    var_clause= astor.to_source(arg.args).strip()
+                    test_clause = test_clause[len(var_clause):].strip()
+                    if_clause = astor.to_source(arg.body.body).strip()
+                    else_clause = astor.to_source(arg.body.orelse).strip()
+                    if args_cnt == 1 and target_api == "map":
+                        newstmt = "np.where({}{}, {},{})".format(receiver, test_clause, if_clause, else_clause)
+                    elif target_api == "apply" and args_cnt == 2:
+                        newstmt = "np.where({}{}, {},{})".format(receiver + test_clause[test_clause.index("["):test_clause.index("]")+1], test_clause[test_clause.index("]")+1:], if_clause, else_clause)
 
+            elif target_api == "sum":
+                check = "string.ascii_lowercase[:len({}.shape)]".format(argstr)
+                newstmt = "np.einsum({} + '->', {})".format(check, argstr)
 
-    def __add_source(self, oldstmt, newstmt, content, lineno, cnt):
-        to_add = template.format(oldstmt, newstmt, oldstmt, newstmt, lineno, '"{}"'.format(oldstmt),
-                                 '"{}"'.format(newstmt))
+            elif target_api == "einsum":
+                subscripts = re.split(",|->", argstr)
+                params = [x.id for x in candidate.args[1:]]
+                if len(subscripts) == 3 and subscripts[0][-1] == subscripts[1][-2]:
+                    if subscripts[2] == subscripts[1][-1]:
+                        newstmt = "np.einsum('j,jk->k', np.einsum('ij->j', {}), {})".format(params[0], params[1])
+                    else:
+                        newstmt = "np.dot({})".format(",".join(params))
+
+            elif target_api == "dot":
+                part1 = "part1 = string.ascii_lowercase[:len({}.shape)]\n".format(receiver)
+                part2 = "part2 = string.ascii_lowercase[::-1][:len({}.shape)]\n".format(argstr)
+                part2 += "part2 = part2[:-2] + part1[-1] + part2[-1]\n"
+                part3 = "part3 = part1[:-1] + part2[:-2] + part2[-1]\n"
+                env = part1 + part2 + part3
+                newstmt = "np.einsum(part1+',' + part2 + '->' + part3, {},{})".format(receiver, argstr)
+
+            elif target_api == "hstack":
+                if isinstance(arg, ast.Name):
+                    newstmt = "np.array(list(chain.from_iterable({})))".format(argstr)
+                else:
+                    newstmt = "np.concatenate({}, axis=1)".format(argstr)
+
+            elif target_api == "atleast_2d":
+                newstmt = "{}.reshape(1,-1)".format(argstr)
+
+            elif target_api == "array":
+                newstmt = "np.fromiter({},dtype={})".format(argstr, "type({}[0])".format(argstr))
+                if isinstance(arg, ast.Call) and arg.func.id == "range":
+                    params = [str(x.n) for x in arg.args]
+                    newstmt = "np.arange({})".format(",".join(params))
+
+            elif target_api == "crosstab" and args_cnt == 2:
+                newstmt = "{}.pivot_table(index='{}', columns='{}', aggfunc=len, fill_value=0)".format(arg.value.id, arg.slice.value.s, candidate.args[1].slice.value.s)
+
+            elif target_api == "empty":
+                thisline = lines[lineno-1].replace(" ", "").strip()
+                nextline = lines[lineno].replace(" ", "").strip() if len(lines) > lineno else None
+                if thisline.endswith("[:]=0") or thisline.endswith("[:]=1"):
+                    oldstmt = thisline
+                elif nextline and (nextline.endswith("[:]=0") or nextline.endswith("[:]=1")):
+                    oldstmt += ";" + nextline
+                newstmt = "np.zeros({})".format(argstr) if oldstmt.endswith("0") else "np.ones({})".format(argstr)
+
+            elif target_api == "full":
+                if candidate.args[1].n == 0:
+                    newstmt = "np.zeros({})".format(argstr)
+                elif candidate.args[1].n == 1:
+                    newstmt = "np.ones({})".format(argstr)
+
+            elif target_api == "vectorize":
+                tmptree = ast.parse(lines[lineno-1].strip())
+                receiver = tmptree.body[0].value.args[0].id
+                oldstmt += "({})".format(receiver)
+                newstmt = "np.frompyfunc({}, 1, 1)({})".format(argstr, receiver)
+
+            if newstmt:
+                self.__replace(oldstmt, env, newstmt, content, lineno, cnt)
+                cnt += 1
+
+    def __replace(self, oldstmt, env, newstmt, content, lineno, cnt):
+        if self.option == 'static':
+            print("Code at line {}  : {}".format(lineno, oldstmt))
+            print('Recommended code: {}'.format(newstmt))
+        elif self.option == 'dynamic':
+            success = self.__run(oldstmt, env, newstmt, content, lineno, cnt)
+            if success:
+                with open("optimization.csv", "r") as f:
+                    text = f.read().strip()
+                    t1, t2 = float(text.split(",")[0]), float(text.split(",")[1])
+                    if t2 < t1:
+                        print("Code at line {} : {}".format(lineno, oldstmt))
+                        print('Recommended code: {}'.format(newstmt))
+                        print('original time:{:.1e}s, new time:{:.1e}s, speedup:{:.1f}x'.format(t1, t2, float(t1) / float(t2)))
+        print("----------------------------------------------------------------------------")
+
+    def __run(self, oldstmt, env, newstmt, content, lineno, cnt):
+        to_add = template.format(oldstmt, env, newstmt, oldstmt, newstmt, lineno, '"{}"'.format(oldstmt),'"{}"'.format(newstmt))
+
         # fill in the template
         to_insert = ast.parse(to_add)
         # insert the new node
         temp_tree = ast.parse(content)
-        CodeInstrumentator(lineno, to_insert).visit(temp_tree)
-        instru_source = astor.to_source(temp_tree)
+        CodeInstrument(lineno, to_insert).visit(temp_tree)
+        new_source = astor.to_source(temp_tree)
+
         file_path = os.path.join(os.path.dirname(self.code_path), 'cache')
-        # creat a new file
+        # create a new file
         if not os.path.exists(file_path):
             os.makedirs(file_path)
         des_path = os.path.join(file_path, 'code_{}.py'.format(cnt))
         with open(des_path, 'w') as wf:
-            wf.write(instru_source)
-        wf.close()
-        self.__execute_code(des_path)
+            wf.write(new_source)
 
-    def __execute_code(self, des_path):
+        cmd = "python " + des_path
         try:
-            cmd = "python " + des_path
-            print("executing:" + des_path)
-            p = subprocess.Popen(cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             output, err = p.communicate(timeout=600)
-            err = str(err).split('\\r\\n')
             if p.returncode == 1:
-                error_type = err[len(err) - 2]
-                print("execution interrupt:" + error_type)
-            else:
-                with open("optimization.csv", "r") as f:
-                    reader = csv.reader(f)
-                    rows = [row for row in reader]
-                    row = rows[-2]
-                    t1 = row[3]
-                    t2 = row[4]
-                    print('origin time:{} , recommend time:{}'.format(t1, t2))
-                f.close()
+                # print("execution interrupt:" + err.decode(sys.stdout.encoding))
+                return False
+            return True
         except Exception as e:
-                print(e)
-
-    def __replace_1agr(self,oldstmt , agr1, keywords, objt, name, target_name):
-        if isinstance(agr1, ast.Index):
-            agr_one = astunparse.unparse(agr1)
-        else:
-            agr_one = astor.to_source(agr1[0]).strip()
-
-        if name == 'hstack' and (isinstance(agr1[0], ast.Tuple) or isinstance(agr1[0], ast.List)):
-            if len(agr1[0].elts) == 2 and target_name == 'append' and isinstance(agr1[0], ast.Tuple):
-                newstmt = 'np.' + target_name + agr_one
-                return newstmt
-            if target_name == 'concatenate':
-                newstmt = 'np.{}({}, axis=1)'.format(target_name, agr_one)
-                return newstmt
-
-        elif name == 'where' or (name == 'map' and isinstance(agr1[0], ast.Dict))\
-                or (name == 'count_nonzero' and isinstance(agr1[0], ast.Compare))\
-                or (name == 'sum' and isinstance(agr1[0], ast.Compare) and target_name == 'count_nonzero'):
-            newstmt = oldstmt.replace(name, target_name)
-            return newstmt
-
-        elif name == 'vstack' and (isinstance(agr1[0], ast.Tuple) or isinstance(agr1[0], ast.List)):
-            if target_name == 'concatenate':
-                newstmt = 'np.{}({},axis=0)'.format(target_name, agr_one)
-                return newstmt
-            elif target_name == 'column_stack':
-                newstmt = 'np.{}({}).T'.format(target_name, agr_one)
-                return newstmt
-        elif name == 'column_stack':
-            newstmt = 'np.{}({}).T'.format(target_name, agr_one)
-            return newstmt
-
-        elif name == 'array':
-            if len(keywords) == 0 and target_name == 'concatenate':
-                newstmt = 'np.{}([{}])'.format(target_name, agr_one)
-                return newstmt
-            elif len(keywords) != 0:
-                if keywords[0].arg == 'dtype' and target_name == 'fromiter':
-                    newstmt = oldstmt.replace(name, target_name)
-                    return newstmt
-            else:
-                pass
-        elif name == 'zeros':
-            newstmt = oldstmt.replace(name, target_name) + "; r2[:]= 0"
-            return newstmt
-
-        elif name == 'ones':
-            newstmt = oldstmt.replace(name, target_name) + "; r2.fill(1)"
-            return newstmt
-
-        elif name == 'sum':
-            if target_name == 'sum':
-                newstmt = '({}).{}()'.format(agr_one, target_name)
-                return newstmt
-            if target_name == 'einsum':
-                if len(keywords) == 0:
-                    newstmt = "np.{}('ij->',{})".format(target_name, agr_one)
-                    return newstmt
-                else:
-                    keyword = astunparse.unparse(keywords[0])
-                    if ('axis=1' in keyword) or ('axis=-1' in keyword):
-                        newstmt = "np.{}('ij->i',{} )".format(target_name, agr_one)
-                        return newstmt
-                    elif ('axis=-2' in keyword) or ('axis=0' in keyword):
-                        newstmt = "np.{}('ij->j',{} )".format(target_name,agr_one)
-                        return newstmt
-
-        elif name == 'str':
-            newstmt = oldstmt.replace('str', 'map(lambda x: x') + ')'
-            return newstmt
-
-        elif name == 'c_':
-            newstmt = oldstmt.replace("c_", "hstack(") + ")"
-            return newstmt
-
-        elif name == 'arrange':
-            newstmt = oldstmt.replace('arrange(', 'np.array(range(')
-            return newstmt
-
-            # pd.Series.map	-> np.where
-        elif name == 'map' and target_name == 'where':
-            if isinstance(agr1[0], ast.Lambda):
-                if isinstance(agr1[0].body, ast.IfExp):
-                    cond = astunparse.unparse(agr1[0].body.test)
-                    cond = cond.replace(astunparse.unparse(agr1[0].args.args).strip(),
-                                        astunparse.unparse(objt).strip()).strip()
-                    newstmt = 'np.{}({},{},{})'.format(target_name, cond, astor.to_source(agr1[0].body.body).strip(),
-                                                     astor.to_source(agr1[0].body.orelse).strip())
-                    return newstmt
-
-    def __replace_2agr(self, oldstmt, agr1, agr2, keywords, name, target_name):
-        agr_one = astor.to_source(agr1).strip()
-        arg_two = astor.to_source(agr2).strip()
-        if name == 'full':
-            if len(keywords) != 0:
-                if isinstance(keywords[0], ast.keyword) and keywords[0].arg == 'dtype':
-                    keyword = astunparse.unparse(keywords[0])
-                    if not (target_name == 'zeros' and int(arg_two) != 0):
-                        newstmt = 'np.{}({},{});r2[:] ={}'.format(target_name,agr_one,keyword,arg_two).replace('\n','')
-                        return newstmt
-                    else:
-                        newstmt = 'np.{}({},{})'.format(target_name, agr_one, keyword).replace('\n', '')
-                        return newstmt
-            else:
-                if not (target_name == 'zeros' and int(arg_two) != 0):
-                        newstmt = 'np.{}({});r2[:] ={}'.format(target_name, agr_one, arg_two).replace('\n','')
-                        return newstmt
-                else:
-                        newstmt = 'np.{}({})'.format(target_name, agr_one).replace('\n', '')
-                        return newstmt
-
-        elif name == 'dot':
-            if target_name == 'einsum':
-                newstmt = "np.{}('ij,jm->im',{},{} )".format(target_name,agr_one,arg_two)
-                return newstmt
-            elif target_name == 'tensordot':
-                newstmt = 'np.{}({},{},axes=1)'.format(target_name,agr_one,arg_two)
-                return newstmt
-
-        elif name == 'sum' and target_name == 'sum':
-            newstmt = '({}).{}({})'.format(agr_one, target_name, arg_two)
-            return newstmt
-
-    def __replace_3agr(self, oldstmt, agr1, agr2, agr3, name, target_name):
-        if name == 'where':
-            if isinstance(agr1, ast.Compare):
-                obj = astor.to_source(agr1.left).strip()
-                idname = agr1.left.value.id
-                attr = agr1.left.attr
-                agr_one = astor.to_source(agr1).strip()
-                arg_two = astor.to_source(agr2).strip()
-                arg_three = astor.to_source(agr3).strip()
-                if target_name == 'map':
-                    cond = astor.to_source(agr1).strip().replace(obj, "x")
-                    newstmt = "{}.{}(lambda x: {} if {} else {})".format(obj, target_name, arg_two, cond, arg_three)
-                    return newstmt
-                elif target_name == 'apply':
-                    cond = astor.to_source(agr1).strip().replace(obj, '#')
-                    attr = "row['" + attr + "']"
-                    cond = cond.replace('#', attr)
-                    newstmt = "{}.{}(lambda row : {} if {} else {}, axis=1)".format(idname, target_name, arg_two, cond, arg_three)
-                    return newstmt
-                elif target_name == 'astype':
-                    newstmt = '({}).{}(( {} ).dtype)'.format(agr_one,target_name,agr_one)
-                    return newstmt
-
+            # print(e)
+            return False
 
 
 
