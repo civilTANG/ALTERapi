@@ -26,11 +26,11 @@ Here is an example `test.py` using `alterapi`
   
 import alterapi
 print("static mode")
-x = alterapi.APIReplace('code.py'，option= 'static' ) 
+x = alterapi.APIReplace(testcase.py，option= 'static' ) 
 x.recommend()
 
 print("dynamic mode")
-x = alterapi.APIReplace('code.py'，option= 'dynamic' )
+x = alterapi.APIReplace(testcase.py，option= 'dynamic' )
 x.recommend()
 ```
 result

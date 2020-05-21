@@ -146,7 +146,7 @@ class APIReplace(object):
                 newstmt = oldstmt.replace(target_api, replace_api)
                 if target_api == "c_":
                     newstmt = newstmt.replace("[","((").replace("]","))")
-                self.__replace(oldstmt, env, newstmt, content, lineno, cnt)
+                self.__run(oldstmt, env, newstmt, content, lineno, cnt)
                 continue
 
             receiver = astor.to_source(candidate.func.value).strip()
@@ -174,7 +174,7 @@ class APIReplace(object):
                         axis = candidate.keywords[0].value.n
                     newstmt = "np.cumprod(axis={})".format(axis)
                 if newstmt:
-                    self.__replace(oldstmt, env, newstmt, content, lineno, cnt)
+                    self.__run(oldstmt, env, newstmt, content, lineno, cnt)
                 continue
 
             arg = candidate.args[0]
@@ -278,54 +278,65 @@ class APIReplace(object):
                 newstmt = "np.frompyfunc({}, 1, 1)({})".format(argstr, receiver)
 
             if newstmt:
-                self.__replace(oldstmt, env, newstmt, content, lineno, cnt)
+                self.__run(oldstmt, env, newstmt, content, lineno, cnt)
                 cnt += 1
 
-    def __replace(self, oldstmt, env, newstmt, content, lineno, cnt):
+    def __run(self, oldstmt, env, newstmt, content, lineno, cnt):
         if self.option == 'static':
             print("Code at line {}  : {}".format(lineno, oldstmt))
-            print('Recommended code: {}'.format(newstmt))
+            print('Recommended code: {}\n'.format(newstmt))
         elif self.option == 'dynamic':
-            success = self.__run(oldstmt, env, newstmt, content, lineno, cnt)
-            if success:
-                with open("optimization.csv", "r") as f:
+            to_add = template.format(oldstmt, env, newstmt, oldstmt, newstmt, lineno, '"{}"'.format(oldstmt),
+                                     '"{}"'.format(newstmt))
+
+            # fill in the template
+            to_insert = ast.parse(to_add)
+            # insert the new node
+            temp_tree = ast.parse(content)
+            CodeInstrument(lineno, to_insert).visit(temp_tree)
+            new_source = astor.to_source(temp_tree)
+
+            wd = os.getcwd()
+            cache_path = os.path.join(wd, 'alterapi_cache')
+            # create a new file
+            if not os.path.exists(cache_path):
+                os.makedirs(cache_path)
+            des_path = os.path.join(cache_path, 'code_{}.py'.format(cnt))
+            with open(des_path, 'w') as wf:
+                wf.write(new_source)
+
+            cmd = "python " + des_path
+            try:
+
+                os.chdir(cache_path)
+                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                output, err = p.communicate(timeout=600)
+                os.chdir(wd)
+
+                if p.returncode == 1:
+                    #print("execution interrupt:" + err.decode(sys.stdout.encoding))
+                    return
+
+                with open(os.path.join(cache_path, "optimization.csv"), "r") as f:
                     text = f.read().strip()
                     t1, t2 = float(text.split(",")[0]), float(text.split(",")[1])
                     if t2 < t1:
                         print("Code at line {} : {}".format(lineno, oldstmt))
                         print('Recommended code: {}'.format(newstmt))
-                        print('original time:{:.1e}s, new time:{:.1e}s, speedup:{:.1f}x'.format(t1, t2, float(t1) / float(t2)))
-        print("----------------------------------------------------------------------------")
+                        print('original time:{:.1e}s, new time:{:.1e}s, speedup:{:.1f}x'.format(t1, t2,
+                                                                                                float(t1) / float(t2)))
+                    print("----------------------------------------------------------------------------")
 
-    def __run(self, oldstmt, env, newstmt, content, lineno, cnt):
-        to_add = template.format(oldstmt, env, newstmt, oldstmt, newstmt, lineno, '"{}"'.format(oldstmt),'"{}"'.format(newstmt))
+            except Exception as e:
+                print(e)
+                return
 
-        # fill in the template
-        to_insert = ast.parse(to_add)
-        # insert the new node
-        temp_tree = ast.parse(content)
-        CodeInstrument(lineno, to_insert).visit(temp_tree)
-        new_source = astor.to_source(temp_tree)
 
-        file_path = os.path.join(os.path.dirname(self.code_path), 'cache')
-        # create a new file
-        if not os.path.exists(file_path):
-            os.makedirs(file_path)
-        des_path = os.path.join(file_path, 'code_{}.py'.format(cnt))
-        with open(des_path, 'w') as wf:
-            wf.write(new_source)
+if __name__ == "__main__":
+    tool = APIReplace('../tests/input.py', option='dynamic')
+    tool.recommend()
 
-        cmd = "python " + des_path
-        try:
-            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            output, err = p.communicate(timeout=600)
-            if p.returncode == 1:
-                # print("execution interrupt:" + err.decode(sys.stdout.encoding))
-                return False
-            return True
-        except Exception as e:
-            # print(e)
-            return False
+
 
 
 

@@ -5,8 +5,8 @@ import setuptools
 
 setup(
     name='alterapi',  
-    version='0.0.1', 
-    description='a tool api_replacement that can help developers discover low-efficiency APIs in the code and recommend higher-efficiency APIs', 
+    version='1.0',
+    description='A tool that can help developers discover low-efficiency API usages in the code and recommend high-efficiency alternatives.',
     author='tangshan',  
     author_email='709166298@qq.com',  
     url='https://github.com/civilTANG/APIreplace', 
