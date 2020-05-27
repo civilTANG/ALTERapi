@@ -73,7 +73,29 @@ df['category'] = np.random.choice(['a','b','c'], 100000)
 r34 = pd.crosstab(df['id'], df['category'])
 r35 = df.groupby('id')['category'].value_counts().unstack(fill_value=0)
 
-r36 = np.empty(1000000); r1[:] = 0
-r37 = np.empty(100000); r1[:] = 1
+r36 = np.empty(1000000); r36[:] = 0
+r37 = np.empty(100000); r37[:] = 1
 r38 = np.full(1000, 0)
 r39 = np.full(1000, 1)
+
+a = np.random.randint(100, size=(10, 10))
+b = np.random.randint(100, size=(10, 10))
+r40 = np.tensordot(a, b, axes=(1, 1))
+r41 = np.tensordot(b, a, axes=(0, 0))
+
+arr = np.arange(100).reshape(2, 50)
+r42 = np.tile(arr, (5, 1, 1))
+
+arr = np.arange(1200).reshape((-1, 3))
+r43 = [np.linalg.norm(x) for x in arr]
+
+dates = pd.date_range('2015', freq='min', periods=100)
+dates = [date.strftime('%d %b %Y %H:%M:%S') for date in dates]
+r44 = pd.to_datetime(dates)
+
+arr = np.arange(100)
+r45 = np.array([oct(x) for x in arr])
+
+df = pd.DataFrame({'v1': np.random.choice(list('abcd'), 100), 'v2':np.random.randint(3, size=100)})
+r46 = df.groupby(['v1','v2']).filter(lambda x: len(x) > 3)
+r47 = df.query("v1 in ['a', 'b']")

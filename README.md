@@ -27,7 +27,7 @@ tool.recommend()
 tool = alterapi.APIReplace('tests/input.py', option='dynamic')
 tool.recommend()
 ```
-Results
+Sample results
 ```
 dynamic mode
 ............
@@ -38,8 +38,12 @@ original time:6.5e-04s, new time:1.6e-05s, speedup:40.3x
 Code at line 39 : (arr > 30).sum()
 Recommended code: np.count_nonzero(arr > 30)
 original time:2.2e-05s, new time:8.0e-06s, speedup:2.8x
-----------------------------------------------------------------------------
+-------------------------------------------------------------
 Code at line 55 : np.array(range(10000))
 Recommended code: np.arange(10000)
 original time:1.0e-03s, new time:4.9e-06s, speedup:210.8x
+-------------------------------------------------------------
+Code at line 83 : np.tensordot(a, b, axes=(1, 1))
+Recommended code: a.dot(b.T)
+original time:1.3e-05s, new time:1.8e-06s, speedup:7.3x
 ```

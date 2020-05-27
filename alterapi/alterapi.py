@@ -7,6 +7,8 @@ builtin_types = [getattr(builtins, d) for d in dir(builtins) if isinstance(getat
 template = """
 import sys, timeit, string
 from itertools import chain
+from dateutil import parser
+
 # original code
 r1 = {}  
 # necessary initializations
@@ -96,11 +98,11 @@ class CodeInstrument(ast.NodeTransformer):
                 self.visit(value)
 
 
-target_apis = ['iloc', 'loc', 'where', 'apply', 'map', 'replace',
-               'sum', 'nonzero', 'einsum', 'dot', 'full', 'empty',
+target_apis = ['iloc', 'loc', 'where', 'apply', 'map', 'replace', 'norm', 'query',
+               'sum', 'nonzero', 'einsum', 'dot', 'tensordot', 'full', 'empty',
                'vstack', 'c_', 'hstack', 'column_stack', 'array', 'vectorize',
-               'atleast_2d', 'combine_first', 'crosstab', 'to_datetime',
-               'unstack', 'groupby', 'value_counts', 'cumprod']
+               'atleast_2d', 'combine_first', 'crosstab', 'to_datetime', 'filter',
+               'unstack', 'groupby', 'value_counts', 'cumprod', 'tile', 'to_datetime']
 
 direct_replaces = {'replace': 'map',
                    'vstack': 'concatenate',
@@ -159,15 +161,13 @@ class APIReplace(object):
                     elif "*" in receiver and candidate.keywords[0].arg == "axis":
                         var1, var2 = receiver[1:-1].split("*")
                         newstmt = "np.einsum('...i,...i ->...', {}, {})".format(var1, var2)
-                if target_api in ["unstack", "filter"]:
+                if target_api == "unstack":
                     vs = CallParser()
                     vs.visit(ast.parse(oldstmt))
                     if vs.names == ['groupby', 'value_counts', 'unstack']:
                         col1 = candidate.func.value.func.value.value.args[0].s
                         col2 = candidate.func.value.func.value.slice.value.s
                         newstmt = "df.groupby(['{}','{}']).size().unstack(fill_value=0)".format(col1, col2)
-                    if vs.names == ['groupby', 'filter']:
-                        newstmt = ""
                 if target_api == "cumprod":
                     axis = 0
                     if len(candidate.keywords) == 1 and candidate.keywords[0].arg == "axis":
@@ -206,6 +206,18 @@ class APIReplace(object):
                         newstmt = "{}.astype({})".format(receiver, arg.body.func.id)
                     else:
                         newstmt = oldstmt.replace(target_api, "map")
+                elif target_api == "filter":
+                    line = lines[lineno - 1].strip()
+                    sequence = ast.parse(line).body[0].value
+                    if isinstance(sequence.func.value, ast.Call) and sequence.func.value.func.attr == "groupby":
+                        receiver = sequence.func.value.func.value.id
+                        col = sequence.func.value.args[0].elts[0].s
+                        if arg.body.left.func.id == "len":
+                            left = astor.to_source(arg.body.left).strip()
+                            ind = argstr.index(left) + len(left)
+                            ops = argstr[ind:]
+                            head = line[line.index(receiver + ".groupby"):line.index("filter") - 1]
+                            newstmt = "{}[{}['{}'].transform('size'){}]".format(receiver, head, col, ops)
                 else:
                     test_clause = astor.to_source(arg.body.test).strip()
                     var_clause= astor.to_source(arg.args).strip()
@@ -252,6 +264,9 @@ class APIReplace(object):
                 if isinstance(arg, ast.Call) and arg.func.id == "range":
                     params = [str(x.n) for x in arg.args]
                     newstmt = "np.arange({})".format(",".join(params))
+                elif isinstance(arg, ast.ListComp):
+                    target = arg.generators[0].iter.id
+                    newstmt = "np.frompyfunc({}, 1, 1)({})".format(arg.elt.func.id, target)
 
             elif target_api == "crosstab" and args_cnt == 2:
                 newstmt = "{}.pivot_table(index='{}', columns='{}', aggfunc=len, fill_value=0)".format(arg.value.id, arg.slice.value.s, candidate.args[1].slice.value.s)
@@ -276,6 +291,40 @@ class APIReplace(object):
                 receiver = tmptree.body[0].value.args[0].id
                 oldstmt += "({})".format(receiver)
                 newstmt = "np.frompyfunc({}, 1, 1)({})".format(argstr, receiver)
+
+            elif target_api == "tensordot":
+                x1, x2 = arg.id, candidate.args[1].id
+                if len(candidate.keywords) == 1 and isinstance(candidate.keywords[0].value, ast.Tuple):
+                    elts = candidate.keywords[0].value.elts
+                    if len(elts) != 2 or not (elts[0].n in [0,1]) or not (elts[1].n in [0,1]):
+                        continue
+                    if elts[0].n == 0:
+                        x1 = x1 + ".T"
+                    if elts[1].n == 1:
+                        x2 = x2 + ".T"
+                    newstmt = "{}.dot({})".format(x1, x2)
+
+            elif target_api == "tile":
+                elts = candidate.args[1].elts
+                if len(elts) == 3 and elts[1].n == 1 and elts[2].n == 1:
+                    newstmt = "np.repeat({}[None,:], {}, axis=0)".format(argstr, elts[0].n)
+
+            elif target_api == "norm":
+                tree = ast.parse(lines[lineno-1])
+                if isinstance(tree.body[0].value, ast.ListComp):
+                    lc = tree.body[0].value
+                    if isinstance(lc.elt, ast.Call) and lc.elt.func.attr == target_api and lc.elt.func.value.attr == "linalg":
+                        newstmt = "np.sqrt(({}**2).sum(axis=1))".format(lc.generators[0].iter.id)
+                        oldstmt = astor.to_source(lc).strip()
+
+            elif target_api == "to_datetime":
+                newstmt = "pd.Series({}).apply(lambda x: parser.parse(x))".format(argstr)
+
+            elif target_api == "query":
+                if "in" in argstr:
+                    col = argstr[:argstr.index("in")-1].strip()
+                    cond = argstr[argstr.index("in") + 3:].strip()
+                    newstmt = "{}[{}['{}'].isin({})]".format(receiver, receiver, col, cond)
 
             if newstmt:
                 self.__run(oldstmt, env, newstmt, content, lineno, cnt)
